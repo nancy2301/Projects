@@ -1,0 +1,559 @@
+---
+title: "Econometric Model for state of Illinois"
+author: "Ankita Pathak, Nancy Jain and Sanyukta Ghai"
+date: "2/4/2019"
+output:
+  html_document: default
+---
+
+Research Questions and geographic area for context
+=====================================================
+
+### State: Illinois
+
++ In the state of Illinois, how do earnings vary by educational attainment?
++ Does the premium for higher education vary by gender?
+
+
+```{r echo = FALSE}
+# Course: ECON 
+# Title: LMA_Project
+# Purpose: EDA
+# Date: February 4 , 2019
+# Author: Ankita Pathak, Nancy Jain and Sanyukta Ghai
+```
+
+```{r echo = FALSE, warning = FALSE, message=FALSE}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+```
+
+
+
+```{r warning = FALSE, message=FALSE}
+
+# Load Packages
+library(here)
+library(tidyverse)
+library(lmtest) 
+library(sandwich)
+library(jtools)
+library(stargazer)
+
+```
+
+
+Load data and begin 
+=========================================
+
+Work with `ss16pil.csv` data set
+
+```{r warning = FALSE, message=FALSE}
+
+lma_data <- read.csv(here("raw_data", "ss16pil.csv"))
+
+colnames(lma_data)
+
+options(scipen = 999)
+
+```
+
+
+Filtering required data
+==========================
+
+```{r warning=FALSE, message=FALSE}
+
+# Filtering required variables based on the data dictionary
+# Generate row id to get unique id
+# Convert Sex, Education as a factor variable
+# Consider Income greater than 0
+# Consider currently employed people
+base <- lma_data %>%
+  mutate(SEX = as.factor(SEX),
+         Gender_legend = ifelse(SEX == 1, "Male", "Female"),
+         Gender_legend = as.factor(Gender_legend),
+         Educ_legend = case_when(SCHL == 13 ~ "Grade_10",
+                                 SCHL == 14 ~ "Grade_11",
+                                 SCHL == 15 ~ "Grade_12",
+                                 SCHL == 16 ~ "High_School_Diploma",
+                                 SCHL == 17 ~ "GED_alternative_credential",
+                                 SCHL == 18 ~ "College_less_than_1yr",
+                                 SCHL == 19 ~ "College_more_than_1yr_no_degree",
+                                 SCHL == 20 ~ "Associate_Degree",
+                                 SCHL == 21 ~ "Bachelor_Degree",
+                                 SCHL == 22 ~ "Master_Degree",
+                                 SCHL == 23 ~ "Professional_Degree",
+                                 SCHL == 24 ~ "Doctorate_Degree"),
+         Educ_legend = as.factor(Educ_legend),
+         Educ_legend = relevel(Educ_legend, "Grade_10"),
+         Race_legend = as.factor(ifelse(RACWHT == 1, "White", "NonWhite"))) %>%
+  filter(PERNP > 0.00 & PERNP < 1e+100) %>% 
+  filter(SCHL >= 13,
+         ESR %in% c(1,2,4,5))%>%
+  rename(Total_Person_Earnings = PERNP, 
+         Educational_Attainment = SCHL, 
+         Gender = SEX, 
+         Employed = ESR, 
+         Age = AGEP) %>%
+  mutate(row_id = row_number()) %>%
+  select(row_id, Total_Person_Earnings, Educational_Attainment, Gender, Gender_legend, 
+         Educ_legend, Employed, Age, Race_legend) %>%
+  drop_na()
+
+#Examine the first 10 observations to make sure data set looks ok
+head(base,10)
+
+```
+
+
+### Sample Selection Criteria
+
++ Taking PERNP (Total Earnings) greater than 0, since, most of the population earns between 0 and 807,000
++ Considered SCHL (education level) is grade 10 and higher, as most of the earning population has completed grade 10 level.  
++ Removed all NAs from the dataset, as those records are meaningless for this analysis.
+
+
+Calculating spread by Gender and Educational Attainment and Race
+===========================================================
+
+
+```{r warning=FALSE, message=FALSE}
+
+# Spread by Gender
+base_spread  <- base %>%
+  group_by(Gender_legend) %>%
+  mutate(yesno = 1) %>%
+  spread(Gender_legend, yesno, fill = 0) 
+
+# Spread by Educational Attainment
+base_spread  <- base_spread %>%
+  group_by(Educ_legend) %>%
+  mutate(yesno = 1) %>%
+  spread(Educ_legend, yesno, fill = 0)
+
+# Spread by Race
+base_spread  <- base_spread %>%
+  group_by(Race_legend) %>%
+  mutate(yesno = 1) %>%
+  spread(Race_legend, yesno, fill = 0)
+
+base_spread <- base_spread %>%
+  select(-c(Educational_Attainment, Gender))
+
+summary(base_spread)
+
+```
+
+Combining Education buckets
+=============================
+
+```{r}
+# Combining GED_alternative_credential and Grade_12 educational attainment
+# Combining 10 & 11th as High School Dropouts (HSD)
+# Combining College_less_than_1yr and College_more_than_1yr_no_degree into College Dropouts educational attainment
+
+base_spread <- base_spread %>%
+  filter(!(Total_Person_Earnings >= 200000 & High_School_Diploma == 1))
+
+base_spread <- base_spread %>%
+  mutate(Grade_12 = ifelse((GED_alternative_credential == 0 & Grade_12 == 0), 0, 1),
+         College_Dropout = ifelse(College_less_than_1yr == 0 & College_more_than_1yr_no_degree == 0, 0, 1),
+         HSD = ifelse(Grade_10 == 0 & Grade_11 == 0, 0, 1)) %>%
+  select(-c(GED_alternative_credential, College_less_than_1yr, College_more_than_1yr_no_degree, Grade_10, Grade_11))
+
+base_spread <- base_spread %>%
+  mutate(Grade_12 = ifelse(High_School_Diploma == 0 & Grade_12 == 0, 0, 1)) %>%
+  select(-c(High_School_Diploma, row_id, Employed))
+
+base_spread <- base_spread %>%
+  select(Total_Person_Earnings, Age, Female, Male, White, NonWhite,
+         HSD, Grade_12, College_Dropout, Bachelor_Degree, Associate_Degree, Master_Degree,
+         Professional_Degree, Doctorate_Degree)
+
+#Examine the first 10 observations to make sure data set looks ok
+head(base_spread,10)
+```
+
+
+Separating Male and Female
+===========================
+
+```{r}
+base_spread_male <- base_spread %>%
+  filter(Male == 1)
+
+base_spread_female <- base_spread %>%
+  filter(Female == 1)
+```
+
+
+
+Estimating MR Model
+=========================
+Age is a proxy variable for Experience, which may influence earnings
+
+```{r warning=FALSE, message=FALSE}
+
+#MR Model for Males
+Earnings.Equation.Male = lm(Total_Person_Earnings ~ Age + I(Age*Age) + White + Grade_12 +
+                            College_Dropout + Associate_Degree + Bachelor_Degree + 
+                            Master_Degree + Professional_Degree + Doctorate_Degree, 
+                            data=base_spread_male)
+summary(Earnings.Equation.Male)
+
+```
+
+
+### Observations
+ 
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ R2 is 0.2042 -> means the model can explain 20.42% variability in the dependent variable Total_Person_Earnings  
++ Intercept is -$6348.36  
++ Most variables are statistically significant at 1% level, Grade 12 is not statistically significant  
++ Controlling for other variables, males with a Professional degree earn $145876.67 more than males educated up to Grade 10  
++ For males, increase in age by 1 year yields increase in earnings of $846.78 while controlling for other variables  
++ A white male earns $12805.70 more than a non-white male, while controlling for other variables  
+
+
+```{r warning=FALSE, message=FALSE}
+
+#MR Model for Females
+Earnings.Equation.Female = lm(Total_Person_Earnings ~ Age + I(Age*Age) + White + Grade_12 +
+                              College_Dropout + Associate_Degree + Bachelor_Degree + 
+                              Master_Degree + Professional_Degree + Doctorate_Degree, 
+                              data=base_spread_female)
+summary(Earnings.Equation.Female)
+
+```
+
+
+### Observations
+ 
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ R2 is 0.1634 -> means the model can explain 16.34% variability in the dependent variable Total_Person_Earnings  
++ Intercept is $5124.15  
++ Most variables are statistically significant at 1% level,Grade 12 and White are not statistically significant  
++ Controlling for other variables, females with a Professional degreeearn $89706.04 more than females educated up to Grade 10  
++ For females, increase in age by 1 year yields increase in earnings of $468.31 while controlling for other variables  
++ White females earn $297 less than non-white females, while controlling for other variables
+
+
+
+```{r warning=FALSE, message=FALSE}
+
+#MR Model for all sample
+Earnings.Equation = lm(Total_Person_Earnings ~ Age + I(Age*Age) + Female + White + I(Female*White) + Grade_12 +
+                         College_Dropout + Associate_Degree + Bachelor_Degree + 
+                         Master_Degree + Professional_Degree + Doctorate_Degree + 
+                         I(Female*Grade_12) + I(Female*College_Dropout) +
+                         I(Female*Associate_Degree) + I(Female*Bachelor_Degree) + I(Female*Master_Degree) + 
+                         I(Female*Professional_Degree) + I(Female*Doctorate_Degree),
+                       data=base_spread)
+summary(Earnings.Equation)
+
+```
+
+
+### Observations
+ 
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ Reference Category for Gender is Male  
++ R2 is 0.231 -> means the model can explain 23.1% variability in the dependent variable Total_Person_Earnings    
++ Intercept is -$78408
++ Most variables are statistically significant at 1% level  
+
+
+Heteroskedasticity
+=======================
+
+```{r warning=FALSE, message=FALSE}
+
+# Plot for heteroskedasticity
+# Males
+plot(Earnings.Equation.Male$residuals ~ Earnings.Equation.Male$fitted.values)
+abline(lm(Earnings.Equation.Male$residuals ~ Earnings.Equation.Male$fitted.values), col = "blue")
+
+# Females
+plot(Earnings.Equation.Female$residuals ~ Earnings.Equation.Female$fitted.values)
+abline(lm(Earnings.Equation.Female$residuals ~ Earnings.Equation.Female$fitted.values), col = "blue")
+```
+
+### Observations
+
++ Since, the plot is not homoskedastic, constant variation assumption is violated.  
++ The residuals do not form a "horizontal band" around the 0 line. This suggests that the variances of the error terms are not equal.  
++ Many residuals "stands out" from the basic random pattern of residuals. This suggests that there are outliers.  
+
+
+Conducting BPG Test on MR Model
+========================================
+
+```{r warning=FALSE, message=FALSE}
+
+# Conduct BPG Test 
+# Hypothesis testing -> Null hypothesis : homoskedasticity
+
+# Males
+bptest(Earnings.Equation.Male)
+bptestequation_male = lm(residuals(Earnings.Equation.Male)*residuals(Earnings.Equation.Male) ~  Age + 
+                      I(Age*Age)  + White + College_Dropout + 
+                      Associate_Degree + Bachelor_Degree + Master_Degree + 
+                      Professional_Degree + Doctorate_Degree, data = base_spread_male)
+summary(bptestequation_male) 
+#note: BP = n*RSquared of model with squared residuals as dependent variable 
+# Observations
+# -> p-value is very close to zero
+# -> Reject null hypothesis. Therefore, model shows heteroskedasticity
+
+# Females
+bptest(Earnings.Equation.Female)
+bptestequation_female = lm(residuals(Earnings.Equation.Female)*residuals(Earnings.Equation.Female) ~  Age + 
+                           I(Age*Age)  + White + Grade_12 + College_Dropout + 
+                           Associate_Degree + Bachelor_Degree + Master_Degree + 
+                           Professional_Degree + Doctorate_Degree, data = base_spread_female)
+summary(bptestequation_female) 
+#note: BP = n*RSquared of model with squared residuals as dependent variable 
+# Observations
+# -> p-value is very close to zero
+# -> Reject null hypothesis. Therefore, model shows heteroskedasticity
+
+# All Sample
+bptest(Earnings.Equation)
+bptestequation = lm(residuals(Earnings.Equation)*residuals(Earnings.Equation) ~  Age + 
+                             I(Age*Age) + Female + White + Grade_12 + College_Dropout + 
+                             Associate_Degree + Bachelor_Degree + Master_Degree + 
+                             Professional_Degree + Doctorate_Degree, data = base_spread)
+summary(bptestequation) 
+#note: BP = n*RSquared of model with squared residuals as dependent variable 
+# Observations
+# -> p-value is very close to zero
+# -> Reject null hypothesis. Therefore, model shows heteroskedasticity
+
+#note: BP = n*RSquared of model with squared residuals as dependent variable 
+
+```
+
+### Observations for both Male and Female models
+
++ With a p-value so close to 0 (2.2 x 10-16) we have strong evidence against the null hypothesis of homoscedasticity.
++ There is enough evidence to reject null hypothesis. Therefore, model shows heteroskedasticity.
+
+
+Estimating Logarithmic Model
+==================================
+
+```{r warning=FALSE, message=FALSE}
+
+#Estimate Logarithmic Model with Age in Quadratic Form
+# Male
+LogEarnings.Equation.Male = lm(log(Total_Person_Earnings, base = exp(1)) ~ Age + I(Age*Age) + 
+                                 White + Grade_12 + College_Dropout + 
+                                 Associate_Degree + Bachelor_Degree + Master_Degree + 
+                                 Professional_Degree + Doctorate_Degree,
+                               data = base_spread_male)
+
+summary(LogEarnings.Equation.Male)
+
+# coeff	      e^coeff	      e^coeff-1	    (e^coeff-1)*100
+# 0.22135406  1.247765136	  0.247765136	  24.77651361
+# 1.36295371  3.90771854	  2.90771854	  290.771854
+
+```
+
+### Observations
+
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ R2 is 0.35 -> means the model can explain 35% variability in the dependent variable Total_Person_Earnings  
++ All variables are statistically significant at 1% level  
++ Controlling for other variables, males with a Professional degree earn 290.77% more than High School Dropout males  
++ Controlling for other variables, white males earn 24.77% more than non-white males  
++ Negative Coefficient on Age*Age and positive coefficient on Age shows that earnings increase at a decreasing rate until a certain age and decrease at an increasing age beyond that age
+
+
+```{r warning=FALSE, message=FALSE}
+
+#Estimate Logarithmic Model with Age in Quadratic Form
+# Female
+LogEarnings.Equation.Female = lm(log(Total_Person_Earnings, base = exp(1)) ~ Age + I(Age*Age) + 
+                                 White + Grade_12 + College_Dropout + 
+                                 Associate_Degree + Bachelor_Degree + Master_Degree + 
+                                 Professional_Degree + Doctorate_Degree,
+                               data = base_spread_female)
+
+summary(LogEarnings.Equation.Female)
+
+# coeff	      e^coeff	      e^coeff-1	    (e^coeff-1)*100
+# 0.02712101  1.027492132	0.027492132	2.749213206
+# 1.33928237  3.816303828	2.816303828	281.6303828
+
+```
+
+### Observations
+
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ R2 is 0.291 -> means the model can explain 29.1% variability in the dependent variable Total_Person_Earnings  
++ Almost all variables are statistically significant at 1% level, White is statistically significant at 10% level  
++ Controlling for other variables, females with a Professional degree earn 281.63% more than High School Dropout females  
++ Controlling for other variables, white females earn 2.75% more than non-white females  
++ Negative Coefficient on Age*Age and positive coefficient on Age shows that earnings increase at a decreasing rate until a certain age and decrease at an increasing age beyond that age
+
+
+```{r warning=FALSE, message=FALSE}
+
+# All Sample
+LogEarnings.Equation = lm(log(Total_Person_Earnings, base = exp(1)) ~ Age + I(Age*Age) + 
+                            Female + White + I(Female*White) + Grade_12 + College_Dropout + 
+                            Associate_Degree + Bachelor_Degree + Master_Degree + 
+                            Professional_Degree + Doctorate_Degree + 
+                            I(Female*Grade_12) + I(Female*College_Dropout) +
+                            I(Female*Associate_Degree) + I(Female*Bachelor_Degree) + I(Female*Master_Degree) + 
+                            I(Female*Professional_Degree) + I(Female*Doctorate_Degree),
+                          data = base_spread)
+
+summary(LogEarnings.Equation)
+
+# coeff	      e^coeff	      e^coeff-1	    (e^coeff-1)*100
+#-0.28880533	0.74915803	-0.25084197	-25.08419702
+#0.22803582	1.256130319	0.256130319	25.61303192
+#1.38438656	3.99237607	2.99237607	299.237607
+
+```
+
+### Observations
+
++ Reference Category for education is High School Dropouts (HSD)  
++ Reference Category for Race is Non-White  
++ Reference Category for gender is Males
++ R2 is 0.3427 -> means the model can explain 34.27% variability in the dependent variable Total_Person_Earnings
++ Almost all variables are statistically significant at 1% level?
++ Controlling for other variables, people with a Professional degree earn 299.24% more than High School Dropouts
++ Controlling for other variables, white people earn 25.61% more than non-white people
++ Controlling for other variables, females earn 25.08% less than males
++ Negative Coefficient on Age*Age and positive coefficient on Age shows that earnings increase at a decreasing rate until a certain age and decrease at an increasing age beyond that age
+
+BPG test on the logEarnings.Equation models
+==============================================
+
+```{r warning=FALSE, message=FALSE}
+
+# Conduct BP test on the logEarnings.Equation model
+bptest(LogEarnings.Equation.Male)
+
+# Males
+bptestequation2_male = lm(residuals(LogEarnings.Equation.Male)*residuals(LogEarnings.Equation.Male) ~ Age + 
+                            I(Age*Age) + White + Grade_12 + College_Dropout + 
+                            Associate_Degree + Bachelor_Degree + Master_Degree + 
+                            Professional_Degree + Doctorate_Degree, data = base_spread_male)
+
+summary(bptestequation2_male) 
+
+bptest(LogEarnings.Equation.Female)
+
+bptestequation2_female = lm(residuals(LogEarnings.Equation.Female)*residuals(LogEarnings.Equation.Female) ~ Age + 
+                            I(Age*Age) + White + Grade_12 + College_Dropout + 
+                            Associate_Degree + Bachelor_Degree + Master_Degree + 
+                            Professional_Degree + Doctorate_Degree, data = base_spread_female)
+
+summary(bptestequation2_female) 
+
+```
+
+### Observations for both Male and Female logEarnings.Equation Models
+
++ Even after redefining the model, p-value is very close to zero  
++ Reject null hypothesis. Therefore, model continues to show heteroskedasticity  
++ We need to find robust standard errors.
+
+Which Model to use?
+====================
+We will use LogEarnings.Equation  
+
++ since percentage difference in earnings makes more sense in this case  
++ log model accounts for skewness in the data
+
+Variance Covariance Matrix
+================================
+
+```{r warning=FALSE, message=FALSE}
+
+#Generate the Variance Covariance Matrix of the Parameter Estimates
+vcovHC(LogEarnings.Equation.Male, type = "HC") 
+vcovHC(LogEarnings.Equation.Female, type = "HC") 
+
+```
+
+
+### Observations
+
++ Here σ2{Bi} is the variance of Bi, and σ{Bi, Bj} is the covariance of Bi and Bj .
++ When variables are uncorrelated, that means their covariance is 0. The variance-covariance
+matrix of uncorrelated variables will be a diagonal matrix, since all the covariances are 0.
++ Here none of the values of co-variances of parameter estimates are high, hence all the estimates are highly uncorrelated.
+
+
+Robust standard errors
+=============================
+
+```{r warning=FALSE, message=FALSE}
+
+#Generate the Robust standard errors and print them on screen 
+sandwich_se_male <- diag(vcovHC(LogEarnings.Equation.Female, type = "HC"))^0.5
+sandwich_se_male
+
+sandwich_se_female <- diag(vcovHC(LogEarnings.Equation.Female, type = "HC"))^0.5
+sandwich_se_female
+
+sandwich_se_log <- diag(vcovHC(LogEarnings.Equation, type = "HC"))^0.5
+sandwich_se_log
+
+```
+
+
+Calculate t-statistic using the robust standard errors
+======================================================
+
+```{r}
+
+# calculate t-statistic based on RSE
+# Males
+summ(LogEarnings.Equation.Male, robust = "HC3", digits = 6)
+# Females
+summ(LogEarnings.Equation.Female, robust = "HC3", digits = 6)
+# Combined
+summ(LogEarnings.Equation, robust = "HC3", digits = 6)
+
+```
+
+## Observations
+
++ All variables are statistically significant at 1% level in LogEarnings.Equation.Male  
++ In LogEarnings.Equation.Female, most variables are statistically significant at 1% level, Grade 12 at 5% and White at 10%
+
+
+
+Limitations 
+=====================
+
++ Gauss-Markov assumptions are violated.
++ There is omitted variable bias. Since, variables like experience are not included and it is correlated with both experience and educational attainment. To account for that, we have used Age as a proxy variable
++ Breusch Pagan Test : Since the residuals and predictor plot is not homoskedastic, there is not enough evidence to support Ho(null hypothesis). Hence, we have to reject Ho(null hypothesis).
+
+```{r}
+#Save the workspace to import in tables Notebook
+save.image("lma.RData")
+
+
+```
+
+
+
+
