@@ -1,0 +1,654 @@
+---
+title: "MLD"
+author: "Ankita Pathak, Nancy Jain and Sanyukta Ghai"
+date: "02/26/2019"
+output:
+  word_document: default
+  html_document: default
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{multirow}
+- \usepackage{wrapfig}
+- \usepackage{float}
+- \usepackage{colortbl}
+- \usepackage{pdflscape}
+- \usepackage{tabu}
+- \usepackage{threeparttable}
+---
+
+Research Questions
+=====================================================
+
+Can we conclude that mortgage lending institutions discriminate against minorities?  
+
+
+```{r echo = FALSE}
+# Course: ECON 
+# Title: MLD_Project
+# Purpose: EDA
+# Date: February 26 , 2019
+# Author: Ankita Pathak, Nancy Jain and Sanyukta Ghai
+```
+
+```{r echo = FALSE, warning = FALSE, message=FALSE}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+```
+
+```{r echo = FALSE, warning = FALSE, message=FALSE}
+
+library(tidyverse)
+library(here)
+library(kableExtra)
+library(knitr)
+library(stringr)
+library(psych)
+
+knitr::opts_chunk$set(echo = FALSE)
+library(stargazer)
+
+```
+
+Load data and begin 
+=========================================
+Work with `MLD Data File-1.csv` data set
+
+```{r, echo = FALSE}
+# Load data 
+mld_data <- read.csv(here("raw_data", "MLD Data File-1.csv"))
+
+#colnames(mld_data)
+
+#head(mld_data, 10)
+
+# Structure of data so know what working with
+#str(mld_data)
+
+#summary(mld_data)
+
+# Married .?
+# Male .?
+# Guidelines 666?
+# LOANPRC - Loan to Value Multiply by 100
+
+#The data set includes the following variables:
+#APPROVE = 1 if mortgage loan was approved, = 0 otherwise
+#GDLIN = 1 if credit history meets guidelines, = 0 otherwise
+#LOANPRC = loan amount/purchase price
+#OBRAT = other obligations as a percent of total income
+#MALE = 1 if male, = 0 otherwise
+#MARRIED = 1 if married, = 0 otherwise
+#BLACK = 1 if black, = 0 otherwise
+#HISPAN = 1 if Hispanic, = 0 otherwise
+#(All applicants are non-Hispanic white, non Hispanic black, or Hispanic.  In 1990 about 94% of Boston residents were white, #Black, or Hispanic. (Links to an external site.)Links to an external site.)
+
+```
+
+
+Filtering required data
+=======================
+
+```{r}
+
+options(scipen = 999)
+
+base <- mld_data %>%
+  filter(GDLIN == 1 | GDLIN == 0,
+         LOANPRC <= 1) %>%
+  mutate(LOANPRC = 100 * LOANPRC,
+         GDLIN = if_else(GDLIN == 1, TRUE, FALSE),
+         WHITE = if_else(BLACK == 0 & HISPAN == 0, TRUE, FALSE),
+         BLACK = if_else(BLACK == 1, TRUE, FALSE),
+         HISPAN = if_else(HISPAN == 1, TRUE, FALSE),
+         APPROVE = if_else(APPROVE == 1, TRUE, FALSE)) %>%
+  select(APPROVE, GDLIN, OBRAT, LOANPRC, WHITE, BLACK, HISPAN)
+
+#head(base)
+
+```
+
+### Sample Selection Criteria
+
++ GDLIN should be between 0 or 1(meaning either a loan requester meets the guidelines or does not) 
+  Removed arbitrary values like 666  
++ LOANPRC less than 100%. Why would the bank approve loans greater than 100% loan to value?  
+
+
+Subset all race and ethnicities
+===============================
+
+```{r}
+
+#str(base)
+
+summary(base)
+
+base_white <- base %>%
+  filter(WHITE == TRUE)
+
+base_black <- base %>%
+  filter(BLACK == TRUE)
+
+base_hispanic <- base %>%
+  filter(HISPAN == TRUE)
+
+```
+
+## Descriptive Statistics for Entire Sample
+
+
+```{r}
+stargazer(as.data.frame(base), align = FALSE, 
+          title = "Descriptive Statistics for Entire sample", 
+          omit.summary.stat = c("n","p25","p75"), 
+          notes = "Total number of records - 1948",
+          covariate.labels=c("Mortgage loan approval",
+                             "Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic White",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          header = FALSE,
+          summary.logical = TRUE,
+          type = "text")
+
+```
+
+```{r}
+
+desc_stats_sample <- base %>%
+  mutate_if(is.logical,as.numeric) %>%
+  describe(interp=FALSE,skew = TRUE, ranges = TRUE,trim=.1,
+           type=3,check=TRUE,fast=NULL,quant=NULL,IQR=FALSE,omit=FALSE) #%>%
+  
+  #select(mean, sd, median, min, max) %>%
+  #mutate_all(funs(round(.,2)))
+desc_stats_sample <- data.frame(Variables = row.names(desc_stats_sample), desc_stats_sample) %>%
+  select(Variables, mean, sd, median, min, max) %>%
+  mutate_if(is.numeric, round, 2)
+
+desc_stats_sample <- desc_stats_sample %>%
+  mutate(Variables = c("Mortgage Loan Approval",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic White",
+                    "Non-Hispanic Black",
+                    "Hispanic"))
+
+desc_stats_sample %>%
+  kable("latex", booktabs = T, caption = "Descriptive Statistics for Entire sample") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  footnote(general = c("Total number of records: 1954"))   
+
+```
+
+
+
+```{r}
+
+desc_stats_white <- base_white %>%
+  mutate_if(is.logical,as.numeric) %>%
+  describe(interp=FALSE,skew = TRUE, ranges = TRUE,trim=.1,
+           type=3,check=TRUE,fast=NULL,quant=NULL,IQR=FALSE,omit=FALSE) #%>%
+
+#desc_stats_white
+
+desc_stats_white <- data.frame(Variables = row.names(desc_stats_white), desc_stats_white) %>%
+  select(Variables, mean, sd, median, min, max) %>%
+  mutate_if(is.numeric, round, 2)
+
+desc_stats_white <- desc_stats_white %>%
+  mutate(Variables = c("Mortgage Loan Approval",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic White",
+                    "Non-Hispanic Black",
+                    "Hispanic"))
+
+desc_stats_white %>%
+  kable("latex", booktabs = T, caption = "Descriptive Statistics for Non-Hispanic White sample") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  footnote(general = c("Total number of records: 1653"))
+
+```
+
+```{r}
+desc_stats_black <- base_black %>%
+  mutate_if(is.logical,as.numeric) %>%
+  describe(interp=FALSE,skew = TRUE, ranges = TRUE,trim=.1,
+           type=3,check=TRUE,fast=NULL,quant=NULL,IQR=FALSE,omit=FALSE) #%>%
+
+#desc_stats_black
+
+desc_stats_black <- data.frame(Variables = row.names(desc_stats_black), desc_stats_black) %>%
+  select(Variables, mean, sd, median, min, max) %>%
+  mutate_if(is.numeric, round, 2)
+
+desc_stats_black <- desc_stats_black %>%
+  mutate(Variables = c("Mortgage Loan Approval",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic White",
+                    "Non-Hispanic Black",
+                    "Hispanic"))
+
+desc_stats_black %>%
+  kable("latex", booktabs = T, caption = "Descriptive Statistics for Non-Hispanic Black sample") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  footnote(general = c("Total number of records: 194"))
+```
+
+```{r}
+
+
+desc_stats_hispanic <- base_hispanic %>%
+  mutate_if(is.logical,as.numeric) %>%
+  describe(interp=FALSE,skew = TRUE, ranges = TRUE,trim=.1,
+           type=3,check=TRUE,fast=NULL,quant=NULL,IQR=FALSE,omit=FALSE) #%>%
+
+#desc_stats_hispanic
+
+desc_stats_hispanic <- data.frame(Variables = row.names(desc_stats_hispanic), desc_stats_hispanic) %>%
+  select(Variables, mean, sd, median, min, max) %>%
+  mutate_if(is.numeric, round, 2)
+
+desc_stats_hispanic <- desc_stats_hispanic %>%
+  mutate(Variables = c("Mortgage Loan Approval",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic White",
+                    "Non-Hispanic Black",
+                    "Hispanic"))
+
+desc_stats_hispanic %>%
+  kable("latex", booktabs = T, caption = "Descriptive Statistics for Hispanic sample") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  footnote(general = c("Total number of records: 107"))
+
+```
+
+
+## Observations
+
++ On average, a mortgage loan approval rate is 87.9% with 91.4% of applications meeting credit history guidelines
++ On average, people have obligations of \$33, if their total income is $100
++ On average, people are applying for 76% loan amount, where 76% is calculated as amount applied for, as a percent of         value of property
++ Highest percentage of people applying for a loan are non-hispanic whites with 84.6%
++ Non-hispanic black with 10% and hispanic with 5.4% people applying for a loan
+
+## Descriptive Statistics for White Sample
+
+
+```{r}
+stargazer(as.data.frame(base_white), align = FALSE, 
+          title = "Descriptive Statistics for WHITE sample", 
+          omit.summary.stat = c("n","p25","p75"), 
+          notes = "Total number of Non-Hispanic Whites - 1648",
+          covariate.labels=c("Mortgage loan approval",
+                             "Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic White",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          header = FALSE,
+          summary.logical = TRUE,
+          type = "text")
+```
+
+## Observations
+
++ On average, a mortgage loan approval rate for non-hispanic whites is 91%
++ 94% of applications meet credit history guidelines
++ On average, non-hispanic whites have obligations of \$32, if their total income is $100
++ On average, non-hispanic whites are applying for 74% loan amount, where 74% is calculated as amount applied for, as a        percent of value of property
+
+## Descriptive Statistics for Black Sample
+
+
+```{r}
+stargazer(as.data.frame(base_black), align = FALSE, 
+          title = "Descriptive Statistics for BLACK sample", 
+          omit.summary.stat = c("n","p25","p75"), 
+          notes = "Total number of Non-Hispanic Blacks - 194",
+          covariate.labels=c("Mortgage loan approval",
+                             "Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic White",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          header = FALSE,
+          summary.logical = TRUE,
+          type = "text")
+```
+
+## Observations
+
++ On average, a mortgage loan approval rate for non-hispanic blacks is 67%
++ Only 73% of applications meet credit history guidelines
++ On average, non-hispanic blacks have obligations of \$35, if their total income is $100
++ On average, non-hispanic blacks are applying for 83% loan amount, where 83% is calculated as amount applied for, as a        percent of value of property
+
+## Descriptive Statistics for Hispanic Sample
+
+
+```{r}
+stargazer(as.data.frame(base_hispanic), align = FALSE, 
+          title = "Descriptive Statistics for HISPANIC sample",
+          omit.summary.stat = c("n","p25","p75"), 
+          notes = "Total number of Hispanics - 106",
+          covariate.labels=c("Mortgage loan approval",
+                             "Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic White",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          header = FALSE,
+          summary.logical = TRUE,
+          type = "text")
+```
+
+## Observations
+
++ On average, a mortgage loan approval rate for hispanics is 78.3%
++ Approximately, 87% of applications meet credit history guidelines
++ On average, hispanics have obligations of \$33, if their total income is $100
++ On average, hispanics are applying for 83% loan amount, where 83% is calculated as amount applied for, as a        percent of value of property
+
+### Descriptive Observations
+
++ There are 1648 Non-Hispanic White  
++ There are 194 Non-Hispanic Black  
++ There are 106 Hispanics.
+
+## Probit Model
+
+```{r}
+
+Approval_probit <- glm(APPROVE ~ GDLIN + OBRAT + LOANPRC + BLACK + HISPAN, family=binomial(link="probit"), data=base) 
+
+summary(Approval_probit)
+
+```
+
+## Results of Probit Models
+
+```{r warning=FALSE}
+stargazer(Approval_probit, 
+          title="Results", 
+          align=TRUE, 
+          type = "text",
+          column.labels=c("Probit"),
+          dep.var.labels=c("Mortgage loan approval"),
+          covariate.labels=c("Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          notes.append = TRUE, notes.align = "l",
+          notes = c("Reference Category for Race is a Non-Hispanic White"), 
+          header = FALSE)
+
+```
+
+
+```{r}
+
+Approval_probit_table <- data.frame(Variables = row.names(summary(Approval_probit)$coeff), summary(Approval_probit)$coeff)
+
+
+
+colnames(Approval_probit_table) <- c('Variables', 'Estimates', "Std. Error", "z value", "p_value")
+
+#Approval_probit_table
+Approval_probit_table <- Approval_probit_table %>%
+  mutate(p = if_else(p_value < 0.01, "***", if_else(p_value < 0.05, "**", if_else(p_value < 0.10, "*", "")))) %>%
+  mutate(Variables = c("Intercept",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic Black",
+                    "Hispanic")) %>%
+    mutate(Estimates = round(Estimates, 3),
+         `Std. Error` = round(`Std. Error`, 3),
+         `z value` = round(`z value`, 3),
+         p_value = round(p_value, 3)) %>%
+  mutate(p = if_else(p_value < 0.01, "***", if_else(p_value < 0.05, "**", if_else(p_value < 0.10, "*", "")))) %>%
+  select(Variables, Estimates, `Std. Error`, `z value`, `p value` = p_value, " " = p )  
+
+
+Approval_probit_table %>%
+  kable("latex", booktabs = T, caption = "Probit Model") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  add_header_above(c(" " = 1, "Dependent Variable : \nMortgage loan approval" = 5)) %>%
+  footnote(general = c("*p<0.1; **p<0.05; ***p<0.01", 
+                       "Reference Category for Race is a Non-Hispanic White", 
+                       "Total number of observations: 1954",
+                       "Log Likelihood: -467.078"))
+```
+
+
+## Observations
+
+1. Non-Hispanic Black: The coefficient of Non-Hispanic Black is -0.449. A person having origins in any of the black racial groups like non-hispanic black, versus a person who is non-hispanic white (the reference group), decreases the z-score by 0.449 
+
+2. Hispanic: The coefficient of Hispanic is -0.413. A person having origins in any of the hispanic groups, versus a person who is a non-hispanic (the reference group), decreases the z-score by 0.413
+
+
+## Logit Model
+
+```{r}
+
+Approval_logit <- glm(APPROVE ~ GDLIN + OBRAT + LOANPRC + BLACK + HISPAN, family=binomial(link="logit"), data=base)
+
+summary(Approval_logit)
+
+Approval_logit_table <- data.frame(Variables = row.names(summary(Approval_logit)$coeff), summary(Approval_logit)$coeff)
+
+colnames(Approval_logit_table) <- c('Variables', 'Estimates', "Std. Error", "z value", "p_value")
+
+Approval_logit_table <- Approval_logit_table %>%
+  mutate(p = if_else(p_value < 0.01, "***", if_else(p_value < 0.05, "**", if_else(p_value < 0.10, "*", ""))))
+
+Approval_logit.OR <-  exp(coef(Approval_logit)) %>%
+  as.data.frame()
+
+Approval_logit.OR <- data.frame(Variables = row.names(Approval_logit.OR), Approval_logit.OR)
+
+colnames(Approval_logit.OR) <- c('Variables', 'Odds Ratio')
+#Approval_logit.OR
+
+Approval_logit_table <- Approval_logit_table %>%
+  left_join(Approval_logit.OR) %>%
+  mutate(Estimates = round(Estimates, 3),
+         `Odds Ratio` = round(`Odds Ratio`, 3),
+         `Std. Error` = round(`Std. Error`, 3),
+         `z value` = round(`z value`, 3),
+         #p_value = str_c(round(p_value, 3), p)) %>%
+         p_value = round(p_value, 3)) %>%
+  #select(-(p))
+  #select(Variables, Estimates, `Odds Ratio`, `Std. Error`, `z value`, `p value` = p_value )
+  select(Variables, Estimates, `Std. Error`, `Odds Ratio`, `p value` = p_value, " " = p )
+
+Approval_logit_table <- Approval_logit_table %>%
+  mutate(Variables = c("Intercept",
+                    "Credit history meets guidelines", 
+                    "Other obligations as a percent of total income", 
+                    "Loan amount as a percent of purchase price",
+                    "Non-Hispanic Black",
+                    "Hispanic"))
+Approval_logit_table
+```
+
+
+## Results of Logit using Kable Extra
+
+```{r}
+Approval_logit_table %>%
+  kable("latex", booktabs = T, caption = "Logit Model") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  column_spec(1, width = "8cm") %>%
+  add_header_above(c(" " = 1, "Dependent Variable : \nMortgage loan approval" = 4)) %>%
+  footnote(general = c("*p<0.1; **p<0.05; ***p<0.01", 
+                       "Reference Category for Race is a Non-Hispanic White", 
+                       "Total number of observations: 1954"))
+#%>%
+ # kable_as_image()
+
+```
+
+
+
+## Results of Logit Models
+
+```{r warning=FALSE, include=FALSE}
+stargazer(Approval_logit,
+          title="Results", 
+          align=TRUE, 
+          type = "text",
+          column.labels=c("Estimates"),
+          dep.var.labels=c("Mortgage loan approval"),
+          covariate.labels=c("Credit history meets guidelines", 
+                             "Other obligations as a percent of total income", 
+                             "Loan amount as a percent of purchase price",
+                             "Non-Hispanic Black",
+                             "Hispanic",
+                             "Intercept"),
+          notes.append = TRUE, notes.align = "l",
+          notes = c("Reference Category for Race is a Non-Hispanic White"), 
+          header = FALSE)
+
+```
+
+## Observations
+
+## Median Values
+
+```{r}
+
+median_values <- base %>%
+  summarise(median_OBRAT = median(OBRAT), medianLOANPRC = median(LOANPRC))
+
+median_OBRAT <- median_values[1,1]
+
+median_LOANPRC <- median_values[1,2]
+
+```
+
+
+## Prototypical Individuals
+
+```{r}
+
+get_prototypical_individual_df <- function(is_probit = FALSE, coeff_list){
+
+  # Extract Coefficient Constants
+  coeff_Intercept <- coeff_list[1]
+  coeff_GDLIN <- coeff_list[2]
+  coeff_OBRAT <- coeff_list[3]
+  coeff_LOANPRC <- coeff_list[4]
+  coeff_NH_BLACK <- coeff_list[5]
+  coeff_HISPANIC <- coeff_list[6]
+
+  # Create an empty tibble
+  df <- tibble(Meets_guidelines = integer(), NH_White = integer(), NH_Black = integer(), Hispanic = integer())
+
+  # Add prototypical Individuals
+  df <- df %>%
+  add_row(Meets_guidelines = 1, NH_White = 1, NH_Black = 0, Hispanic = 0 ) %>%
+  add_row(Meets_guidelines = 1, NH_White = 0, NH_Black = 1, Hispanic = 0 ) %>%
+  add_row(Meets_guidelines = 1, NH_White = 0, NH_Black = 0, Hispanic = 1 ) %>%
+  add_row(Meets_guidelines = 0, NH_White = 1, NH_Black = 0, Hispanic = 0 ) %>%
+  add_row(Meets_guidelines = 0, NH_White = 0, NH_Black = 1, Hispanic = 0 ) %>%
+  add_row(Meets_guidelines = 0, NH_White = 0, NH_Black = 0, Hispanic = 1 )
+  
+  # Add columns to define prototypical individuals in words
+  df <- df %>%
+    mutate(Prototype_GDLIN = if_else(Meets_guidelines == 0, "Does not meet guidelines", "Meets Guidelines"),
+           Prototype_Race = str_c(if_else(NH_White == 0, "", "Non-Hispanic White"),
+                           if_else(NH_Black == 0, "", "Non-Hispanic Black"),
+                           if_else(Hispanic == 0, "", "Hispanic")))
+  
+  # Calculate z - differently for logit and probit based on value of is_probit
+  df <- df %>%
+    mutate(z = coeff_Intercept + 
+             coeff_GDLIN * Meets_guidelines +
+             coeff_OBRAT * median_OBRAT +
+             coeff_LOANPRC * median_LOANPRC +
+             coeff_NH_BLACK * NH_Black +
+             coeff_HISPANIC * Hispanic)
+  
+  if (is_probit){
+    df <- df %>%
+      mutate(Approval_z_score = z)  %>%
+      mutate(Predicted_prob_approval = round(pnorm(Approval_z_score),4))
+  }
+  else
+  {
+    df <- df %>%
+      mutate(Approval_z_score = (1/(1+exp(-1*z)))) %>%
+      mutate(Predicted_prob_approval = round(Approval_z_score,4))
+  }
+  
+  # Calculate predicted probability of approval and select relevant columns
+  df <- df  %>%
+    select(Prototype_GDLIN, Prototype_Race, Predicted_prob_approval) 
+
+  return(df)
+}
+
+
+```
+
+```{r}
+logit_prototypes <- get_prototypical_individual_df(FALSE, summary(Approval_logit)$coeff)
+
+probit_prototypes <- get_prototypical_individual_df(TRUE, summary(Approval_probit)$coeff)
+
+prototypes <- probit_prototypes %>%
+  left_join(logit_prototypes, by = c("Prototype_GDLIN", "Prototype_Race")) %>%
+  mutate(Probit = Predicted_prob_approval.x,
+         Logit = Predicted_prob_approval.y
+         ) %>%
+  select(-c(Predicted_prob_approval.x, Predicted_prob_approval.y))
+
+prototypes <- prototypes %>%
+  select(`Credit Guidelines` = Prototype_GDLIN, Race = Prototype_Race, Probit, Logit )
+
+prototypes %>%
+  kable("latex", booktabs = T, caption = "Predicted Probability of Approval for Prototypic Individuals") %>%
+  kable_styling(position = "center", full_width = F) %>%
+  add_header_above(c(" " = 2, "Predicted Probability of Approval" = 2)) %>%
+  column_spec(3, width = "2cm") %>%
+  column_spec(4, width = "2cm") %>%
+  collapse_rows(1, latex_hline = "full", valign = "middle") %>%
+  footnote(general = c("Median Value of OBRAT : 33%", "Median Value of LOANPRC : 80%")) 
+  
+#%>%
+ # group_rows("Meets Guidelines", 1, 3) %>%
+  #group_rows("Does Not Meet Guidelines", 4, 6)
+
+```
+
