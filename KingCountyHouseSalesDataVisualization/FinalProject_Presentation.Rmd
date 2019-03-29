@@ -1,0 +1,97 @@
+---
+title: "Findings related to House Sales in King County"
+author: "By Nancy Jain"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  slidy_presentation: default
+  ioslides_presentation: default
+---
+
+```{r echo = FALSE}
+
+# Title: Presentation
+# Purpose: Findings related to effectiveness of Advertising and Promotions
+# Date: March 3, 2019
+# Author:Nancy Jain
+```
+
+```{r echo = FALSE}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+
+```
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+
+# load libraries and plots
+library(plotly)
+library(stringr)
+
+
+load("map_price_area.RData")
+load("house_sales_by_date.RData")
+load("sqft_living_lot_condition.RData")
+load("zipcode_avg_price_per_sqft.RData")
+
+```
+
+
+Introduction  
+=========================================
++ King County and its present
++ Expectation vs reality of King County housing market
++ Data available for King County housing market analysis study
+
+
+Even though number of people migrating to King County have increased, house sales have decreased
+=========================================
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplotly(house_sales_by_date)
+
+```
+
+
+Finding 1: Most of the houses sold have average condition, that is, condition = "3"
+=========================================
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+# Show the plot that was made in the Technical Appendix and saved in the workspace
+sqft_living_lot_condition
+
+```
+
+
+Finding 2: Next, I have categorized the areas of King County relative to the house prices in that area. For a given price range, the graph shows all the areas with houses available in it.
+=========================================
+
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+map_price_area
+
+```
+
+
+================================================
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+zipcode_avg_price_per_sqft
+
+```
+
+Conclusion
+===============
+
++ Top takeaways
+    - What have we missed and what should we focus?
+    - What is changing which we should accomodate in decision making?
+
+## Thank You
+

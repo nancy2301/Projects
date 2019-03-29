@@ -1,0 +1,1467 @@
+---
+title: "Final Project"
+author: "Nancy Jain"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    toc: true
+    theme: united    
+    toc_depth: 2    
+    toc_float: TRUE
+    highlight: tango
+---
+
+```{r echo = FALSE}
+# Course: BUAN 5210
+# Title: Final Project Technical Appendix
+# Purpose: Analyzing the home selling price vary by  other factors like number of bedrooms, number of bathrooms, zipcode, year built, sqft in King County
+# Date: March 20, 2019
+# Author: Nancy Jain
+```
+
+
+# 1. Clear environment, Load Packages and Load Data
+
+
+```{r, warning= FALSE, message= FALSE}
+
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+
+```
+
+
+
+```{r, warning= FALSE, message= FALSE }
+# Load libraries
+library(tidyverse)
+library(corrplot)
+library(GGally)         # For ggpairs, a detailed correlation graphic
+library(gridExtra)      # For grouping graphs
+library(stringr)        # Manipulate strings
+library(lubridate)      # Time Series with respect to Weeks
+library(kableExtra)     # Prettier tables 
+library(janitor)        # Prettier cross-tabs
+library(MultinomialCI)  # To calculate multinomial confidence intervals  
+library(here)
+library(dichromat)
+library(leaflet)
+library(DT)
+library(RColorBrewer)
+library(psych)
+library(plotly)
+
+options(knitr.table.format = "html") # setting for kable table to use html styles
+```
+
+
+### Work with sales and products data set
+
+```{r, warning= FALSE, message= FALSE}
+# Load data 
+dat <- read_csv("kc_house_data.csv")
+
+# Examine data structure 
+#str(dat)
+
+#summary(dat)
+
+```
+
+### Observations
+
++ House Price Table
+    + 1 ID Variable: id
+    + 12 Numeric Variables: price, bedrooms, bathrooms, sqft_living, sqft_lot, floors, sqft_basement, sqft_above, lat, long, sqft_living15, sqft_lot15 
+    + 5 factor variables: waerfront, view, condition, grade, zipcode
+    + 3 date variables: date, yr_built, yr_renovated
+    + 21613 house records 
+    + Mean of units 8.579, Median 7
+    + Mean price 3.763, Median 3.790  
+    + ID represents house ID
+    + Average price is $540,088
+    + Average floor size is 2080 sqft
+    + Average year built is 1971
+
+
+# 2. Data Dictionary and Filtering, mutating and selecting required Columns 
+
+## 2.1. Data Dictionary 
+
++ This includes information about the columns of our interest
++ date_sold: date on which the house is sold
++ month_sold: month in which the house is sold
++ year_sold: year in which the house is sold
++ selling_price: house sold at what price
++ sqft_living: size of the living portion of the house 
++ price_per_sqft: selling_price/sqft_living
++ bedrooms: number of bedrooms
++ bathrooms: number of bathrooms
++ sqft_lot: size of the lot of the house 
++ floors: number of fllors
++ waterfront: with or without waterfront view: 0 = no view, 1 = view
++ condition: condition of the house ranges from 1 to 5, according to King County system.
++ grade: grade of the house according to King County grading system
++ yr_built: year in which house built
++ zipcode: zipcode of the areas
++ lat: latitude of the house
++ long: longitude of the house
++ renovated: if the house is renovated or not: 0 = no, 1 = yes
+
+## 2.2. Filtering, mutating and selecting required Columns
+
+```{r, warning= FALSE, message= FALSE }
+# Modify columns types
+# condition: 1 to 5
+# Grade: 1 to 13
+house_data <- dat %>%
+  drop_na() %>%
+  filter(bedrooms <= 11) %>%
+  mutate(renovated = ifelse(yr_renovated == 0, 0, 1)) %>%
+  mutate(zipcode = as.factor(zipcode),
+    year_sold = year(date),
+         month_sold = month(date)) %>%
+  mutate(year_sold = as.factor(year_sold),
+         month_sold = as.factor(month_sold),
+         condition = as.factor(condition),
+         grade = as.factor(grade),
+         bedrooms = as.factor(bedrooms),
+         bathrooms = as.factor(bathrooms),
+         floors = as.factor(floors),
+         waterfront = as.factor(waterfront),
+         renovated = as.factor(renovated)) %>%
+  mutate(price_per_sqft = price/sqft_living) %>%
+  select(date, month_sold, year_sold, price, price_per_sqft, bedrooms, bathrooms, sqft_living, sqft_lot, floors, waterfront, condition, grade, yr_built, zipcode, lat, long, renovated) %>%
+  rename(date_sold = date,
+         selling_price = price)
+
+
+summary(house_data)
+attach(house_data)
+
+```
+
+### Observations
+.  
++ Price ranges from $75,000 to $7,700,000, Median at $450,000 and Mean at $540,088. Slightly skewed towards the right  
++ Maximum houses are from 98103 zipcode, followed by 98038 and 98115  
++ Most houses are of grade "7" and condition "4"
++ Only 914 houses are renovated and 20,699 are not renovated
++ Data consists of 21613 observations and 15 variables.
++ We have data of house sales from May 2014 to May 2015
+
+
+
+
+# 3. Questions to be answered
+
+
++ How does the house sales vary by zipcode and month?
++ How does the price vary by condition and grade of the house according to King County grading system?
++ Comparative market analysis of the houses on the basis of features such as location, age, condition, square footage, renovations?
++ What are the home pricing (selling price) trends?
+
+
+# 4. Basic EDA
+
+## 4.1 Univariate non-graphical -- Categorical
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Function to get the relevant grouped data frames
+# df -> dataframe
+# groupVariable -> the group by column 
+# output -> the resulting data frame
+getGroupedUnivariateData <- function(df, groupVariable) {
+  # group_by() grouped variable
+  # summarise() reduces variable to descriptive stat
+  # count is the new variable name, n() is a counting function
+  # percent is a new variable, sum() and nrow() are functions
+  # tot_selling_price -> total selling price per grouped variable
+  # order_by() tot_selling_price
+  result <- df %>%             
+    group_by_(groupVariable) %>%     
+    summarise(count = n(),   
+              percent = (sum(count) / nrow(df)) * 100,
+              tot_revenue = sum(selling_price),   
+              avg_revenue = (mean(selling_price))) %>%
+    arrange(desc(tot_revenue)) %>%
+    as.data.frame() 
+  
+  return(result)
+}
+
+```
+
+
+### Monthly sales
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_month <- getGroupedUnivariateData(house_data, "month_sold")
+
+house_data_month %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+### Observations
+
++ Maximum number of houses are sold in 5th month, that is, in the month of May.
++ Minimum number of houses are sold in 1st month, that is, in the month of January.
+
+
+### Bedrooms
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_bedrooms <- getGroupedUnivariateData(house_data, "bedrooms")
+
+house_data_bedrooms %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+### Observations
+
++ Maximum number of sales is for 3 bedrooms house, followed by 4 bedrooms.
++ Minimum number of sales sales is for 11 bedroom house.
++ 3 bedroom house has total revenue of 4580 million dollars.
++ 11 bedroom house has total revenue of 0.52 million dollars.
+
+
+### Floors
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_floors <- getGroupedUnivariateData(house_data, "floors")
+
+house_data_floors %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+### Observations
+
++ House with 2 floors have maximum total revenue, followed by 1 floor
++ House with 2.5 floors have maximum average revenue
++ House with 3.5 floors have total minimum revenue
+
+
+### Waterfront
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_waterfront <- getGroupedUnivariateData(house_data, "waterfront")
+
+house_data_waterfront %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+### Observations
+
++ House without waterfront view has total revenue more than those with waterfront view.
++ House with waterfront view has average revenue more than those without waterfront view.
+
+### Zipcode
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_zipcode <- getGroupedUnivariateData(house_data, "zipcode")
+
+house_data_zipcode %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+### Observations
+
++ There are 70 zipcodes.
++ Area with zipcode 98004 has maximum total revenue of 429 million dollars.
++ Area with zipcode 98103 has maximum sales of 601 houses.
++ Area with zipcode 98148 has minimum total revenue of 16 million dollars and minimum sales of 57 houses.
+
+### Renovated
+
+```{r, warning= FALSE, message= FALSE}
+
+# price and price per sqft by zipcode
+house_data_renovated <- getGroupedUnivariateData(house_data, "renovated")
+
+house_data_renovated %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+### Observations
+
++ House without renovation has total revenue more than those with renovation.
++ House with renovation has average revenue more than those without renovation.
+
+
+## 4.2. Univariate graphical code -- Categorical
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Code histograms using grid.arrange so can see all quant variables together group by Ship.Mode
+grid.arrange(
+  house_data_bedrooms %>% 
+    ggplot(aes(x = reorder(bedrooms, -count), y = count)) +  
+    xlab("bedrooms") + 
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  house_data_floors %>% 
+    ggplot(aes(x = reorder(floors, -count), y = count)) +
+    xlab("floors") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  house_data_waterfront %>% 
+    ggplot(aes(x = reorder(waterfront, -count), y = count)) +
+    xlab("waterfront") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  house_data_zipcode %>% 
+    ggplot(aes(x = reorder(zipcode, -count), y = count)) +
+    xlab("zipcode") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  house_data_renovated %>% 
+    ggplot(aes(x = reorder(renovated, -count), y = count)) +
+    xlab("renovated") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  ncol = 2
+) 
+
+```
+
+### Observations
+
++ There are maximum 3 bedroom and 1 floor homes.
++ There are more homes without waterfront view and without renovation.
+
+## 4.3. Univariate non-graphical -- Quantitative
+
+### Descriptive Statistics
+
+```{r, warning=FALSE, message=FALSE}
+
+# Get descriptive stats 
+summary(house_data)
+
+```
+
+### Observations
+
++ Selling Price - Mean is quite large compared to the median. Hence, right-skewed distribution.
++ Sqft living - Mean is large compared to the median. Hence, right-skewed distribution.
++ Sqft lot - Mean is quite large compared to the median. Hence, right-skewed distribution.
++ Latitude - Mean and median are almost same. Mean is 47.56 and median is 47.57.
++ Longitude - Mean and median are almost same. Mean and median values are -122.2.
+
+
+## 4.4. Univariate graphical -- Quantitative
+
+### Histograms
+
+```{r, warning=FALSE, message=FALSE}
+
+
+# Code histograms using ggplot() so we can see all quant variables
+
+grid.arrange(
+house_data %>% 
+  ggplot(aes(selling_price/1000)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("selling price (in 1000 $)")+
+  theme_classic(),
+
+house_data %>% 
+  ggplot(aes(price_per_sqft)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("price per sqft (in $)") +
+  theme_classic(),
+
+house_data %>% 
+  ggplot(aes(sqft_living)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("sqft of home")+
+  theme_classic(),
+
+house_data %>% 
+  ggplot(aes(lat)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("latitude") +
+  theme_classic(), 
+
+house_data %>% 
+  ggplot(aes(long)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("longitude")+
+  theme_classic()
+)
+
+```
+
+### Observations
+
++ Maximum selling price peak at around $ 800,000  
++ Houses with lower sqft has most sales.  
++ Higher latitude have maximum sales where as lower longitude have maximum sales.
+
+### Boxplots of quantitative data 
+
+```{r, warning= FALSE, message= FALSE }
+
+# get box plot of all the quanitative variables
+par(mfrow = c(2, 2))
+boxplot(selling_price/1000, main = "Selling Price / 1000")
+boxplot(price_per_sqft, main = "price per sqft")
+boxplot(sqft_living, main = "sqft living")
+
+```
+
+### Observations
+
++ 75% of sales less than $ 1000,000. 
++ Most houses have price per sqft between $200 and $400.
++ Amost all houses have sqft less than 6000 sqft.
+
+
+## 4.5. Multivariate non-graphical -- Categorical
+
+
+### 4.5.1. Cross-Tabs
+
+### Bedrooms and floors
+
+```{r, warning= FALSE, message= FALSE }
+# Make cross-tabs between two categorical variables using janitor package
+# cross-tab of bedrooms and floors
+house_data %>% 
+  tabyl(bedrooms, floors) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+
+### Bedrooms and month sold
+
+```{r, warning= FALSE, message= FALSE }
+# Make cross-tabs between two categorical variables using janitor package
+# cross-tab of bedrooms and floors
+house_data %>% 
+  tabyl(bedrooms, month_sold) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2)%>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+
+### Bedrooms and waterfront
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of bedrooms and waterfront
+
+house_data %>% 
+  tabyl(bedrooms, waterfront) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2)%>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+
+### Bedrooms and condition
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of bedrooms and condition
+house_data %>% 
+  tabyl(bedrooms, condition) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+### Floors and waterfront
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of floors and waterfront
+house_data %>% 
+  tabyl(floors, waterfront) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+### Floors and condition of the house
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of floors and condition
+house_data %>% 
+  tabyl(floors, condition) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+### Waterfront and condition of the house
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of waterfront and condition
+house_data %>% 
+  tabyl(waterfront, condition) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+
+### Observations
+
++ 3 bedrooms with 1 floor has maximum sales of 25%.
++ This is followed by 4 bedroom and 2 floor houses. that is, 17.04%.
++ 3 bedrooms have maximum sales in May month of 5%.
++ 3 bedrooms without waterfront view have maximum sales of 45%.
++ 3 bedroom with medium condition (3 out of 5) have maximum sales 29%.
++ 1 floor without waterfront view has maximum sales of 49%.
++ 2 floors with medium condition (3 out of 5) have maximum sales of 32%.
+
+
+## 4.6. Multivariate graphical code -- Categorical
+
+
+```{r, warning= FALSE, message= FALSE }
+
+#Function for heatmap
+ heat_map <- function (x, y,y_title,x_title){
+   x<-enquo(x)
+   y<-enquo(y)
+   
+   
+   house_data %>%
+     group_by(!!x,!!y) %>%
+     summarise(count = n())  %>%
+     ggplot(aes(!!x,!!y)) +
+     geom_tile(aes(fill = -count))+
+     ylab(y_title) + xlab(x_title)+
+     theme_classic() +
+     scale_fill_continuous(guide = guide_legend(title = "Count")) +
+     scale_fill_gradient(low = "white", high = "darkolivegreen3")
+     
+ }
+
+grid.arrange(
+heat_map(bedrooms, floors, "floors", "bedrooms"),
+heat_map(bedrooms, waterfront, "waterfront", "bedrooms"),
+heat_map(bedrooms, condition, "condition", "bedrooms"),
+heat_map(bedrooms, renovated, "renovated", "bedrooms"),
+heat_map(month_sold, condition, "condition", "month sold"),
+nrow=3)
+
+
+```
+
+
+
+## 4.7. Multivariate non-graphical -- Quantitative
+
+The standard measure between quantitative variables is correlation 
+
+### Correlation plots
+
+```{r, warning= FALSE, message= FALSE }
+# Find correlation of quantitative variables
+cor_plot <- house_data %>%
+  select(selling_price, price_per_sqft, sqft_living, yr_built, lat, long)
+
+cor(cor_plot) 
+
+
+```
+
+### Observations
+
++ Selling Price and sqft living have maximum correlation (0.702)
++ Year built and price per sqft have negative correlation (-0.29)
++ Latitude and longitude have negative correlation (-0.13)  
++ Latitude and price per sqft have negative correlation (-0.23)
+
+
+## 4.8. Multivariate graphical code -- Quantitative
+
+
+### Pairwise Plot
+
+```{r, warning=FALSE, message=FALSE}
+# Correlation plot
+
+house_data %>% 
+  select(date_sold, selling_price, price_per_sqft, sqft_living, yr_built, lat, long) %>%   pairs.panels(hist.col="darkolivegreen3")
+
+```
+
+
+
+# 5. Detailed EDA
+
+## 5.1. Multi-variate non graphical: categorical and quantitative
+
+
+```{r, warning= FALSE, message= FALSE}
+
+bedrooms_bathrooms_average_price <- house_data %>%
+  group_by(bedrooms, bathrooms) %>%
+  summarise(Total_Revenue = sum(selling_price)) %>%
+  spread(bedrooms, Total_Revenue) %>%
+  as.data.frame()
+
+bedrooms_bathrooms_average_price %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+
+bedrooms_bathrooms_average_sqft <- house_data %>%
+  group_by(bedrooms, bathrooms) %>%
+  summarise(Average_sqft = mean(sqft_living)) %>%
+  spread(bedrooms, Average_sqft) %>%
+  as.data.frame()
+
+bedrooms_bathrooms_average_sqft %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+### Observations
+
++ Maximum revenue is from 2.5 bathroom and 4 bedroom house.
++ Highest average sqft price is 8 bathroom and 7 bedroom house.
+
+
+## 5.2. Multi-variate graphical: categorical and quantitative
+
+
+
+```{r, warning=FALSE, message=FALSE}
+# how does revenue vary by date sold and what is the impact of waterfront view and renovation on their revenue
+
+
+house_data %>% 
+  mutate(waterfront = ifelse(waterfront == 1, "Waterfront View", "No Waterfront View"),
+         renovated = ifelse(renovated ==1, "Renovated", "Not Renovated")) %>%
+  group_by(renovated, waterfront) %>% 
+  ggplot(aes(x = date_sold, y = selling_price/1000)) +
+  geom_line(color = "darkolivegreen3") +
+  theme_classic() +
+  facet_grid(renovated ~ waterfront) +
+labs(y = 'Selling price (, 1000 $)', x = 'Date Sold')
+
+
+```
+
+### Observations
+
++ Non renovated houses shows similar trend in revenue throughtout the year with few spikes in between.
++ Renovated houses without waterfront view earned more in October 2014
++ Renovated houses with waterfront view earned more in July 2014
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# how do sales vary by sqft_living, sqft_lot and house condition
+
+sqft_living_lot_condition <- ggplot(house_data, aes(x = sqft_living, y = sqft_lot, color = condition)) + 
+geom_point(alpha = 0.5) +
+   ylim(0, 1000000) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Living Area (sq.ft)', y = 'Lot Area (sq.ft)', title = "Sales are more for houses having good condition",
+     subtitle = "House built in 1900 - 2015") +
+guides(color = guide_legend(title = 'Condition')) +
+scale_x_continuous(breaks=seq(0, 12000, 2000)) +
+scale_color_brewer(palette="Paired")
+
+ sqft_living_lot_condition
+
+```
+
+
+### Observations
+
++ More sales are observed for lower living area and lower lot area.
++ Also most of the houses sold have condition = 3
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# how do sales vary by sqft_living, sqft_lot and number of bedrooms
+
+ggplot(house_data, aes(x = sqft_living, y = sqft_lot, color = bedrooms)) + 
+geom_point(alpha = 0.5) +
+   ylim(0, 1000000) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Living Area (sq.ft)', y = 'Lot Area (sq.ft)', title = "House Sales in King County, USA",
+     subtitle = "House built in 1900 - 2015") +
+guides(color = guide_legend(title = 'Bedrooms')) +
+scale_x_continuous(breaks=seq(0, 12000, 2000)) +
+scale_color_brewer(palette="Paired")
+
+```
+
+### Observations
+
++ More sales are observed for lower living area and lower lot area.
++ Also most of the houses sold have bedrooms between 3 and 6.
+
+
+# 6. Statistical Analysis
+
+## 6.1. Multiple Linear Regression
+
+```{r, warning= FALSE, message= FALSE }
+
+# Linear regression
+mod <- lm(log(price_per_sqft) ~  date_sold + bedrooms + sqft_lot + floors + condition + grade + zipcode + yr_built + waterfront + renovated + lat + long, data = house_data)
+
+# Review output
+summary(mod) 
+
+```
+
+### Observations
+
++ In the above model, dependent variable is log of price per sqft and independent variables are date_sold, bedrooms, sqft_lot, floors, condition, grade, zipcode, yr_built, waterfront, renovated, lat, long.
++ I haven't considered selling price and sqft_living in the model because price per sqft = selling price / sqft_living and introducing those variables would have induced endogenous variable bias.
++ Also, r-square value is 70.33%, which means, 70.33% variation in log of price per sqft can be explained by our model.
++ Although there are 70 zipcodes. We cannot ignore the fact that price per sqft varies a lot by area and hence, it was necessary to include zipcode in our model. 
++ Almost all the zipcodes are statistically significant at 1% level of significance.
+
+### 6.1.1. Plot residuals to check for pattern
+
+```{r, warning= FALSE, message= FALSE }
+
+# plot residuals to check for patterns
+par(mfrow = c(2, 2))
+plot(mod$fitted.values, mod$residuals)
+plot(yr_built, mod$residuals)
+plot(sqft_lot, mod$residuals)
+plot(date_sold, mod$residuals)
+
+
+```
+
+
+### 6.1.2 Chi-square test
+
++ Tell if there is a pattern between price per sqft and area zipcode.    
+    - The factor levels are independent  
+
++ Null hypothesis: Are all prices the same?  
+
+```{r, warning= FALSE, message= FALSE }
+# Are price per sqft same across all regions?
+# Not tidyverse so have to use base code
+chisq.test(table(price_per_sqft, zipcode))
+
+```
+
++ Statistical measures
+    - p-value: p-value very close to zero. Therefore, reject the null hypothesis.
+
++ Confidence intervals  
+    - Because this is a sample we cannot be sure our descriptive statistics are representative of the population  
+
+
+### 6.1.3. Correlation with target variable
+
+```{r, warning=FALSE, message=FALSE}
+
+house_good <- house_data %>% select(sqft_living, sqft_lot, price_per_sqft, lat, long)
+
+p1 <- ggplot(house_good, aes(x = sqft_living, y = price_per_sqft)) +
+geom_point(color = 'black', size = 0.5) +
+geom_smooth(method="lm", color = 'darkolivegreen3', size = 0.5, se = FALSE) +
+theme_classic() + 
+labs(x = 'Sqft living', y = 'Price per sqft (USD)') + 
+scale_y_continuous(labels = scales::comma)
+
+p2 <- ggplot(house_good, aes(x = sqft_lot, y = price_per_sqft)) +
+geom_point(color = 'black', size = 0.5) +
+geom_smooth(method="lm", color = 'darkolivegreen3', size = 0.5, se = FALSE) +
+theme_classic() + 
+labs(x = 'Sqft lot', y = 'Price per sqft (USD)') + 
+scale_y_continuous(labels = scales::comma)
+
+p3 <- ggplot(house_good, aes(x = lat, y = price_per_sqft)) +
+geom_point(color = 'black', size = 0.5) +
+geom_smooth(method="lm", color = 'darkolivegreen3', size = 0.5) +
+theme_classic() + 
+labs(x = 'Latitude', y = 'Price per sqft (USD)') + 
+scale_y_continuous(labels = scales::comma)
+
+p4 <- ggplot(house_good, aes(x = long, y = price_per_sqft)) +
+geom_point(color = 'black', size = 0.5) +
+geom_smooth(method="lm", color = 'darkolivegreen3', size = 0.5) +
+theme_classic() + 
+labs(x = 'Longitude', y = 'Price per sqft (USD)') + 
+scale_y_continuous(labels = scales::comma)
+
+grid.arrange(p1,p2,p3,p4, nrow = 2,
+              top = "House Sales in King County, USA")
+
+```
+
+### Observations
+
++ Sqft living decreases with increase in price per sqft.
++ Sqft lot decreases with increase in price per sqft.
++ As shown latitude increases with increase in price per sqft.
++ Longitude decreases with increase in price per sqft.
+
+### 6.1.4. Cleveland dot Plot
+
+```{r, warning= FALSE, message= FALSE }
+# Reorder for more clarity
+(g1 <- ggplot(coeff_CI, aes(x = estimate, y = reorder(row.names(coeff_CI),desc(pval)))) +
+  geom_point(size = 3) +
+  xlim(min(coeff_CI$low_CI), max(coeff_CI$high_CI)) +
+  ylab("Variable") +
+  xlab("Coefficient") +
+  theme_bw() +
+  geom_segment(aes(yend = reorder(row.names(coeff_CI),desc(pval))), 
+               xend = coeff_CI$high_CI, color = "red") +
+  geom_segment(aes(yend = reorder(row.names(coeff_CI),desc(coeff_CI$pval))), 
+               xend = coeff_CI$low_CI, color = "red") +
+   xlab("Coefficient with Confidence Interval") +
+  geom_vline(xintercept = 0, color = "darkolivegreen3") + # line gives context
+   theme_classic()
+)
+```
+
+
+## 6.2. K Means Clustering
+
+```{r, warning=FALSE, message=FALSE}
+
+# Reference: littlemissdata.com
+# Clustering Price for Map Index Purpose
+
+set.seed(1)
+
+priceclustering <- house_data %>% select(selling_price)
+
+# Build a kmeans model
+model_km3 <- kmeans(priceclustering, centers = 5)
+
+# Extract the cluster assignment vector from the kmeans model
+clust_km3 <- model_km3$cluster
+
+# Create a new dataframe appending the cluster assignment
+price_cluster <- mutate(house_data, cluster = clust_km3)
+
+price_index <- function(x){
+                   for(i in 1:nrow(x)){
+                       if(x[i,"cluster"] == 1){
+                       x[i,"index"] = '75,000 - 409,500'
+                       } else if(x[i,"cluster"] == 5) {
+                       x[i,"index"] = '409,501 - 673,500'
+                       } else if(x[i,"cluster"] == 3){
+                       x[i,"index"] = '673,501 - 1,137,500'
+                       } else if(x[i,"cluster"] == 2){
+                       x[i,"index"] = '1,137,501 - 2,140,500'
+                       } else {
+                       x[i,"index"] = '2,140,501 - 7,700,000'
+                       }    
+                   }
+              return(x)
+              }
+
+price_map <- price_index(price_cluster)
+price_map$index <- as.factor(price_map$index)
+    
+house1 <- filter(price_map, cluster == 1)
+house2 <- filter(price_map, cluster == 2)
+house3 <- filter(price_map, cluster == 3)
+house4 <- filter(price_map, cluster == 4)
+house5 <- filter(price_map, cluster == 5)
+
+# Color Index    
+pal <- colorFactor(palette = c("blue", "red", "green", "pink", "orange"), 
+                   levels = c('75,000 - 409,500', '409,501 - 673,500', '673,501 - 1,137,500', 
+                              '1,137,501 - 2,140,500', '2,140,501 - 7,700,000'))
+
+# Draw a Map
+map_price_area <- leaflet(options = leafletOptions(minZoom = 9, dragging = TRUE)) %>% 
+addProviderTiles(provider = 'CartoDB')%>%
+addCircleMarkers(data = house1, radius = 1, 
+                 popup = ~paste0("<b>", 'USD ', selling_price, "</b>", "<br/>", "House area (sqft): ", 
+                                 sqft_living, "<br/>", "Lot area (sqft): ", sqft_lot),
+                 color = ~pal(index),  group = '75,000 - 409,500') %>%
+addCircleMarkers(data = house5, radius = 1, 
+                 popup = ~paste0("<b>", 'USD ', selling_price, "</b>", "<br/>", "House area (sqft): ", 
+                                 sqft_living, "<br/>", "Lot area (sqft): ", sqft_lot),
+                 color = ~pal(index),  group = '409,501 - 673,500') %>%
+addCircleMarkers(data = house3, radius = 1, 
+                 popup = ~paste0("<b>", 'USD ', selling_price, "</b>", "<br/>", "House area (sqft): ", 
+                                 sqft_living, "<br/>", "Lot area (sqft): ", sqft_lot),
+                 color = ~pal(index),  group = '673,501 - 1,137,500') %>%
+addCircleMarkers(data = house2, radius = 1, 
+                 popup = ~paste0("<b>", 'USD ', selling_price, "</b>", "<br/>", "House area (sqft): ", 
+                                 sqft_living, "<br/>", "Lot area (sqft): ", sqft_lot),
+                 color = ~pal(index),  group = '1,137,501 - 2,140,500') %>%
+addCircleMarkers(data = house4, radius = 1, 
+                 popup = ~paste0("<b>", 'USD ', selling_price, "</b>", "<br/>", "House area (sqft): ", 
+                                 sqft_living, "<br/>", "Lot area (sqft): ", sqft_lot),
+                 color = ~pal(index),  group = '2,140,501 - 7,700,000') %>%
+setView(lng = -122.001008, lat = 47.474443, zoom = 9) %>%
+addLegend(pal = pal, 
+          values = c('75,000 - 409,500', '409,501 - 673,500', '673,501 - 1,137,500', 
+                     '1,137,501 - 2,140,500', '2,140,501 - 7,700,000'),
+          opacity = 0.5, title = "Price Range", position = "bottomright") %>%
+addLayersControl(overlayGroups = c('75,000 - 409,500', '409,501 - 673,500', '673,501 - 1,137,500', '
+                                  1,137,501 - 2,140,500', '2,140,501 - 7,700,000'), position = "bottomleft")
+
+map_price_area
+
+
+
+```
+
+### Observations
+
++ K means clustering is done to cluster, classify and analyze areas with respect to house prices.
++ Here the aim is to partition the houses into areas in which each house belongs to the area with the nearest mean price, serving as a prototype of the area.
+
+
+# 7. Research Questions
+
+## 7.1 Question 1: How does the house sales and revenue vary by zipcode and year built?
+
+### 7.1.1 Zipcode
+
+```{r, warning=FALSE, message=FALSE}
+# How does house sales and revenue vary by zipcode
+
+house_data %>%
+  group_by(zipcode) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_Revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+
+```{r, warning=FALSE, message=FALSE}
+# How does average price per sqft vary by zipcode
+zipcode_avg_price_per_sqft <- house_data %>%
+  group_by(zipcode) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count, bedrooms)) %>%
+  slice(1:10) %>%
+  ggplot(aes(x = reorder(zipcode, -Average_Price_per_sqft), y = Average_Price_per_sqft)) +
+  geom_bar(stat="identity", fill = "darkolivegreen3") +
+  theme_classic()  +
+  theme(text = element_text(size = 10))+
+  theme(axis.ticks.y = element_blank(), 
+        axis.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank()) +
+  theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+ labs(x = "Zipcode",
+      y = "Average Price per sqft ($)",
+      title = "Top 10 most expensive areas in King County",
+      subtitle = "") +
+  geom_text(aes(label = str_c('$',round(Average_Price_per_sqft, 0))), size = 3, vjust = 1.5, position = position_dodge(0.9))
+
+zipcode_avg_price_per_sqft
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# How does number of houses sold vary by zipcode
+
+house_data %>%
+  group_by(zipcode) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count, bedrooms)) %>%
+  slice(1:10) %>%
+  ggplot(aes(x = reorder(zipcode, -Count), y = Count)) +
+  geom_bar(stat="identity", fill = "darkolivegreen3") +
+  theme_classic()  +
+  theme(text = element_text(size = 10))+
+  theme(axis.ticks.y = element_blank(), 
+        axis.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank()) +
+  theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+ labs(x = "Zipcode",
+      y = "Number of sales",
+      title = "Top 10 zipcodes with most number of houses sold",
+      subtitle = "") +
+  geom_text(aes(label = str_c(round(Count, 0))), size = 3, vjust = 1.5, position = position_dodge(0.9))
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does selling price of the house vary by zipcode
+
+house_data %>%
+  group_by(zipcode) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count, bedrooms)) %>%
+  slice(1:10) %>%
+  ggplot(aes(x = reorder(zipcode, -Total_Revenue), y = Total_Revenue/1000000)) +
+  geom_bar(stat="identity", fill = "darkolivegreen3") +
+  theme_classic()  +
+  theme(text = element_text(size = 10))+
+  theme(axis.ticks.y = element_blank(), 
+        axis.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank()) +
+  theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+ labs(x = "Zipcode",
+      y = "Total revenue (in mil $)",
+      title = "Top 10 zipcodes with maximum revenue",
+      subtitle = "") +
+  geom_text(aes(label = str_c(round(Total_Revenue/1000000, 0), 'mil $')), size = 3, vjust = 1.5, position = position_dodge(0.9))
+
+```
+
+
+
+### Observations
+
++ The above plots include top 10 area zipcodes by price per sqft, total revenue and total sales.
++ It is interesting to note that zipcode 98004 has maximum sales and revenue and it is one of the most expensive area in King County. 
++ Price per sqft for the top 10 most expensive areas ranges between 568$ and 377$.
++ Also, total revenue for the 10 maximum revenue generating areas are between 430 million dollars and 95 million dollars.
+
+### 7.1.2 Year Built
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does sales vary by year built
+
+house_data %>%
+group_by(yr_built) %>%
+summarise(n = n()) %>%
+ggplot(aes(x = yr_built, y = n)) +
+geom_line(color = 'darkolivegreen3') +
+geom_smooth(method="lm", color = 'black', size = 0.5, se = FALSE) +
+theme_classic() +
+theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Year Built', y = 'Total', title = "Includes number of houses built in 1900 - 2015 in King County",
+     subtitle = "Sales are more for the houses which are recently built") +
+scale_x_continuous(breaks=seq(1900, 2015, 10))
+
+```
+
+### 7.1.2 Date Sold
+
+```{r, warning=FALSE, message=FALSE}
+# how does sales vary by date sold
+house_sales_by_date <- house_data %>%
+group_by(date_sold) %>%
+summarise(n = n()) %>%
+ggplot(aes(x = date_sold, y = n)) +
+geom_line(color = 'darkolivegreen3') +
+geom_smooth(method="lm", color = 'black', size = 0.5, se = FALSE) +
+theme_classic() +
+theme(plot.title = element_text(hjust = 0, face = 'bold', color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Date Sold', y = 'Number of houses', title = "Overall sales have dropped between May 2014 - May 2015",
+     subtitle = "")
+  
+
+
+house_sales_by_date 
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# how does sales vary by date sold
+house_data %>%
+group_by(date_sold) %>%
+summarise(n = n(),
+          total_revenue = sum(selling_price)) %>%
+ggplot(aes(x = date_sold, y = total_revenue/1000000)) +
+geom_line(color = 'darkolivegreen3') +
+geom_smooth(method="lm", color = 'black', size = 0.5, se = FALSE) +
+theme_classic() +
+theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Date Sold', y = 'Total Revenue (in mil $)', title = "Includes daily revenue of sales between May 2014 - May 2015",
+     subtitle = "There is slight decrease in revenue between May 2014 and May 2015")
+
+```
+
+
+## 7.2. How does the price vary by condition and grade of the house according to King County grading system?
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does sales vary by grade and condition
+house_data %>%
+  group_by(grade, condition) %>%
+  summarize (Revenue_sum = sum(selling_price)) %>%
+  ggplot(aes(x = reorder(grade, -Revenue_sum), y = Revenue_sum/1000000, fill = condition)) +
+  geom_bar(stat="identity") +
+  theme_classic()  +
+  theme(text = element_text(size = 10))+
+  theme(plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+ labs(x = "Grades",
+      y = "Total Revenue (in mil USD)",
+      title = "Houses with Grade 7, on King County scale, have maximum revenue",
+      subtitle = "Houses with condition 3 have maximum revenue among all grades.",
+      caption = "There are 13 grades and 5 conditions")  +
+  scale_fill_manual(values=c("darkolivegreen4", "yellow4","darkolivegreen3", "darkolivegreen2", "darkolivegreen1") )
+
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does revenue vary by condition and living area
+ggplot(house_data, aes(x = selling_price/1000, y = sqft_living, color = condition)) + 
+geom_point(alpha = 0.5) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Sold At (,000 $)', y = 'Living Area (sq.ft)', title = "Price increases as living area increases.",
+     subtitle = "More sales are for lower area and condition 3 houses.") +
+guides(color = guide_legend(title = 'Condition')) +
+scale_color_brewer(palette="Paired")
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does revenue vary by grade and living area
+
+ggplot(house_data, aes(x = selling_price/1000, y = sqft_living, color = grade)) + 
+geom_point(alpha = 0.5) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Sold At (,000 $)', y = 'Living Area (sq.ft)', title = "Higher prices houses have higher grades.",
+     subtitle = "More revenue and sales are for houses between grade 7 and 13.") +
+guides(color = guide_legend(title = 'Grade')) +
+scale_color_brewer(palette="Paired")
+
+```
+
+
+
+## 7.3. Comparative market analysis of the houses on the basis of other features such as bathrooms, renovations, sqft_lot, floors, waterfront?
+
+
+```{r, warning=FALSE, message=FALSE}
+# Analysis of house sales and revenue by number of bedrooms
+
+house_data %>%
+  group_by(bedrooms) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_Revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Analysis of house sales and revenue by number of bathrooms
+
+house_data %>%
+  group_by(bathrooms) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Analysis of house sales and revenue by number of floors
+
+house_data %>%
+  group_by(floors) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Analysis of house sales and revenue by waterfront view
+
+house_data %>%
+  group_by(waterfront) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_Revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Analysis of house sales and revenue by houses renovated
+
+house_data %>%
+  group_by(renovated) %>% 
+  summarise(Count = n(),
+  Average_Price_per_sqft = mean(price_per_sqft),
+  Total_Revenue = sum(selling_price),
+  Average_Revenue = mean(selling_price)) %>%
+  arrange(desc(Average_Price_per_sqft, Count)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+ggplot(house_data, aes(x = lat, y = long, color = condition)) + 
+geom_point(alpha = 0.5) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'latitude', y = 'longitude', title = "Sales remain almost same across latitude and longitude",
+     subtitle = "Comparatively fewer sales in higher latitude and lower longitude") +
+guides(color = guide_legend(title = 'Condition')) +
+scale_color_brewer(palette="Paired")
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+# how does revenue vary by condition and living area
+ggplot(house_data, aes(x = selling_price/1000, y = sqft_living, color = bedrooms)) + 
+geom_point(alpha = 0.5) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Sold At (,000 $)', y = 'Living Area (sq.ft)', title = "Price increases as living area increases.",
+     subtitle = "More sales are for 3 to 7 bedroom houses .") +
+guides(color = guide_legend(title = 'Bedrooms')) +
+scale_color_brewer(palette="Paired")
+
+```
+
+
+### Observations
+
++ Maximum sales and revenue is from 3 bedroom house.
++ Maximum average price per sqft is of 1 bedroom house.
++ Maximum average revenue is from 8 bedroom house.
++ Maximum sales and revenue is from 2.5 bathroom house.
++ Maximum average price per sqft is of 7.75 bathroom house.
++ Maximum average revenue is from 6 bathroom house.
++ Maximum sales from 1 floor house and maximum revenue is from 2 floors house.
++ Maximum average price per sqft is of 3.5 floors house.
++ Maximum average revenue is from 2.5 floors house.
++ Even though more houses are sold without waterfront view, average price per sqft and average revenue is for more for houses with waterfront view.
++ Even though more houses are sold without renovation, average price per sqft and average revenue is for more for renovated houses.
++ More sales are between 47.4 and 47.8 degree latitude and -122.30 and -121.80 degree longitude.
+
+# 8. Summary
+
+## 8.1. What are the home pricing (selling price) trends?
+
++ Newer houses generate more revenue
++ Sales and revenue decreased between May 2014 and May 2015
++ Houses with grade 7 and condition 3 generate maximum revenue
++ Renovated houses and houses with waterfront view have more average revenue
++ Houses with higher sqft area are more priced
+
+# 9. Appendix
+
+## 9.1. Represents the construction quality of improvements. Grades run from grade 1 to 13. Generally defined as:
+
++ 1-3 Falls short of minimum building standards. Normally cabin or inferior structure.
++ 4 Generally older, low quality construction. Does not meet code.
++ 5 Low construction costs and workmanship. Small, simple design.
++ 6 Lowest grade currently meeting building code. Low quality materials and simple designs.
++ 7 Average grade of construction and design. Commonly seen in plats and older sub-divisions.
++ 8 Just above average in construction and design. Usually better materials in both the exterior and interior finish work.
++ 9 Better architectural design with extra interior and exterior design and quality.
++ 10 Homes of this quality generally have high quality features. Finish work is better and more design quality is seen in the floor plans. Generally have a larger square footage.
++ 11 Custom design and higher quality finish work with added amenities of solid woods, bathroom fixtures and more luxurious options.
++ 12 Custom design and excellent builders. All materials are of the highest quality and all conveniences are present.
++ 13 Generally custom designed and built. Mansion level. Large amount of highest quality cabinet work, wood trim, marble, entry ways etc. 
+
+## 9.2. Relative to age and grade. Coded 1-5.:
+
++ 1 = Poor- Worn out. Repair and overhaul needed on painted surfaces, roofing, plumbing, heating and numerous functional inadequacies. Excessive deferred maintenance and abuse, limited value-in-use, approaching abandonment or major reconstruction; reuse or change in occupancy is imminent. Effective age is near the end of the scale regardless of the actual chronological age.
++ 2 = Fair- Badly worn. Much repair needed. Many items need refinishing or overhauling, deferred maintenance obvious, inadequate building utility and systems all shortening the life expectancy and increasing the effective age.
++ 3 = Average- Some evidence of deferred maintenance and normal obsolescence with age in that a few minor repairs are needed, along with some refinishing. All major components still functional and contributing toward an extended life expectancy. Effective age and utility is standard for like properties of its class and usage.
++ 4 = Good- No obvious maintenance required but neither is everything new. Appearance and utility are above the standard and the overall effective age will be lower than the typical property.
++ 5= Very Good- All items well maintained, many having been overhauled and repaired as they have shown signs of wear, increasing the life expectancy and lowering the effective age with little deterioration or obsolescence evident with a high degree of utility. 
+
+# 10. Save File
+
+```{r, warning=FALSE, message=FALSE}
+
+# Save the rds file so I can reuse anything from this file in another file
+save.image("map_price_area.RData")
+save.image("house_sales_by_date.RData")
+save.image("sqft_living_lot_condition.RData")
+save.image("zipcode_avg_price_per_sqft.RData")
+
+# recover using load()
+#load("p.Rdata")
+
+```
+

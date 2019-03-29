@@ -1,0 +1,116 @@
+---
+output: html_document
+---
+
+#### **To: New Real Estate Agents and Trainees**  
+  
+#### **From: Nancy Jain**  
+  
+#### **Date: `r format(Sys.time(), '%B %d, %Y')`**   
+  
+#### **RE: Findings related to House Sales in King County**  
+
+***
+
+```{r echo = FALSE}
+# Course: BUAN 5210
+# Title: HTML memo format
+# Purpose: Findings related to House Sales in King County
+# Date: Mar 21, 2019
+# Author: Nancy Jain 
+
+```
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+
+```
+
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+# Show the plot that was made in the Technical Appendix and saved in the workspace
+library(plotly)
+library(stringr)
+
+load("map_price_area.RData")
+load("house_sales_by_date.RData")
+load("sqft_living_lot_condition.RData")
+load("zipcode_avg_price_per_sqft.RData")
+
+```
+
+### Introduction
+
+Housing Prices in King County started rising when big players like Amazon and Microsoft started
+expanding their presence in Greater Seattle area. King County takes in one of the most attractive housing markets. Most software engineers find this region both attractive and low-cost. Even though big players continue investing to expand their presence bringing in more and more families to King County. Despite increase in the people shifting to this area and settling in, the real estate sector is no longer growing as as it was expected to. The cause for this is King County is currently experiencing housing affordability challenges for some groups and household income categories. Even though the population and demand for owning a home in King County is increasing, this requirement has forced up single family home prices at a much quicker rate than household income. This has created an imbalance between household income growth and home prices. The data I used, for the purpose of analysis of the King County housing market, consists of housing sales information between May 2014 and May 2015. Along with the sales information, other information like number of bedrooms, number of bathrooms, waterfront view, condition, house grades (according to King County grading system), selling price, year in which the house was built, if the houses is renovated or not and coordinates of the house are also considered for this study.
+
+
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+# introductory graph to validate my statement that revenue have decreased
+house_sales_by_date
+
+```
+
+Above graph tells us that housing sales have decreased between May 2014 and May 2015. This does not
+mean loss for real estate agents and brokers. They should keep one thing in mind “Data is king, but
+knowledgeable data rules”. This data can lead them to create a transparent market for customers where the price at which they buy or sell a property is very much appropriate. Hence, this market is all about applying data to target the right clients at the right time. Hence, going forward I am proceeding to utilize data to corroborate my findings and analysis I have fared to the housing market.
+
+
+### Findings
+
+##### 1. Most of the houses sold have average condition, that is, condition = "3"
+
++ According to King County rating system, houses are ranged from 1 to 5, where 1 being bad and 5 being good. Although it is expected that houses with good condition should have more sales, it is not that in real.
+
++ Most of the houses sold in King County region have average condition = 3, which is average rating. That’s probably because sellers, who are interested in selling houses don’t like to spend a a pile unnecessary renovations and constructions. They do basic overall maintenance and construction, so that the interested buyer doesn’t face major issues after buying the house. Besides, most of the buyers do renovations and minor constructions after buying according to their needs. So, even the buyers do not want to spend significant difference of  money just for good conditions and some extra construction thinking they could utilize the margin in the renovation after buying it.
+
++ Also, every buyer wishes to purchase the best house possible in his afforded price range. By keeping the needs of the buyer in mind it is always good to make sure that the house in which buyer is interested is in  average (“condition = 3”) condition but fulfills his basic requirements. The extra money could be utilized wisely further.
+
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+# Show the plot that was made in the Technical Appendix and saved in the workspace
+sqft_living_lot_condition
+
+```
+
+
+##### 2. Next, I have categorized the areas of King County relative to the house prices in that area. For a given price range, the graph shows all the areas with houses available in it.
+
++ I have segregated King County regions according to the sales and revenue of houses then that it will be convenient to draw an overall picture of the sales and regions. Please find the same below.
+
+
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+map_price_area
+
+```
+
++ According to the above map, regions like Bellevue, have most houses sold at higher price, whereas there are other regions which have houses of all ranges depending on other features like condition, bedrooms, sqft and more. We can even filter the price range from bottom left corner and view the selections according to our preferences. All the price ranges are given in the bottom right corner, which will help us to determine the color of the dot. The color combined with the region tells us the cost of the house and the neighborhood. Example: Blue color dot in Tacoma tells us the house in Tacoma ranges between $ 75,000 - $ 409,500
+
+
++ We can also view the density of the plots and hence infer which area has more sales when compared with other area. Areas that are more populated with dots have more sales and those which are less populated with dots have comparatively less sales.
+
+
+
+### Conclusion
+Although these sales are for 2014-15 year, we can use this analysis and apply on the data of any year. The analysis gives us some strong inference which aims to benefit all,  the buyers, the seller and real estate broker. This analysis also an important information to the state government and development authorities using which they can easily target the under populated and under attracted area for more development and outgrowth.  As last part of my conclusion, I would like to project a graph showing the top 10 most expensive areas in King County.
+
+
+```{r echo = FALSE, include = TRUE, warning=FALSE}
+
+zipcode_avg_price_per_sqft
+
+```
+
+
+Best regards,
+
+Nancy Jain
