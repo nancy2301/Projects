@@ -1,0 +1,1583 @@
+---
+title: "Modeling passenger's airport and airline choice behavious"
+author: "Ankita Pathak, Nancy Jain, Sanyukta Ghai, Sourabh Gupta"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  # pdf_document: 
+  #   latex_engine: xelatex
+  
+---
+
+# Goal of the EDA
+
+The goal of this EDA is to understand different parameters which impacts an individual's choice of Airpot or Airline.
+
+# Prerequisites for analysis
+
+Following needs to be prior to any analysis:
+
++ Clear your environment
++ Load required packages
++ Organize work and point to the right directories
+
+
+
+```{r, include= FALSE}
+
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+
+
+
+```
+
+```{r, include= FALSE }
+# Load libraries
+#library(here) not used yet
+library(tidyverse)
+library(corrplot)
+library(GGally)
+library(gridExtra)
+library(readxl)
+library(kableExtra)
+library(janitor)
+library(GGally)
+library(psych)
+library(stringr)
+library(dplyr)
+library(openxlsx)
+library(knitr)
+library(skimr)
+
+```
+
+
+Load two dataset provided with this project.
+
++ Survey data is the record of every individual 
++ Airport Airline data is raw data for trating missing values in survey. There are 3 sheets in this file
+
+```{r, warning=FALSE, message=FALSE}
+
+dat1 <- read_excel("../raw_data/airport_choice_survey_EN_ver2.0_Capstone.xlsx", sheet = 1)
+dat2 <- read_excel("../raw_data/Airport_Airline_data.xlsx", sheet = 1)
+airline_airfare <- read_excel("../raw_data/Airport_Airline_data.xlsx", sheet = 2)
+provincial_distances <- read_excel("../raw_data/Airport_Airline_data.xlsx", sheet = 3)
+
+```
+
+# Descriptive Statistics
+Summarization of the given data
+
+```{r, warning=FALSE, message=FALSE}
+# Examine data structure 
+str(dat1)
+summary(dat1)
+```
+
+We have so many missing values in survey data:
+
++ Neglecting parameters where less than 10 records are missing, DepartureMinute - flight departure time has 120 records missing
++ Airfare - Price of the ticket has 155 records missing
++ Access Cost - Cost from residence to Airport has 197 records missing
++ Access Time - Commute time from residence to Airport has 97 records missing
++ Income - Earing of the survey participant has 132 records missing
++ Mileage - Air miles from airlines for frequent travel customer has 398 records missing
+
+# Data manipulation
+
+Changing the survey data to make it easier to read and use during EDA process
+
+## Categorical Variables - Mutation
+
+### Airport
+Modifying the Airport Name for purpose of analysis
+
++ There are no records in survey data where Airport is missing
+
+```{r}
+# 1. Inchoen (ICN) Airport
+# 2. Gimpo (GMP) Airport
+# No missing values
+dat1 <- dat1 %>%
+  mutate(Airport = case_when(Airport == 1 ~ "ICN",
+                            Airport == 2 ~ "GMP"))
+
+```
+
+### Airline
+Modifying Airline Choice Names
+
++ There are 10 records in survey data where Airline is missing
++ We will try to get this data using Flight number if provided for these missing records, else remove them for modelling
+
+```{r}
+# 1. Korean Air(KE)
+# 2. Asiana Airlines (OZ)
+# 3. Korean LCC
+# 4. Foreign Airlines
+
+# Replace missing values
+dat1 <- dat1 %>%
+  mutate(Airline = ifelse(!is.na(Airline), Airline, ifelse(str_detect(FlightNo, "KE"), "Korean Air", "Unknown"))) %>%
+  filter(Airline != "Unknown")
+
+dat1 <- dat1 %>%
+ mutate(Airline = case_when(Airline == 1 ~ "Korean Air",
+                           Airline == 2 ~ "Asiana Airlines",
+                           Airline == 3 ~ "Korean LCC",
+                           Airline == 4 ~ "Foreign Airlines"))
+```
+
+### Gender
+Modifying Gender
+
++ There are 3 records in survey data where Gender is missing
++ We will consider them and Not mentioned instead of filling with mode value
+
+```{r}
+
+dat1 <- dat1 %>%
+  mutate(Gender = if_else(Gender == 1, "Male","Female","Not Mentioned"))
+```
+
+### Nationality
+Modifying Nationality
+
++ There are no records in survey data where Nationality is missing
+
+```{r}
+# 1. Korea
+# 2. China
+# 3. Japan
+# 4. Southeast Asia
+# 5. Other
+dat1 <- dat1 %>%
+  mutate(Nationality = case_when(Nationality == 1 ~ "Korea",
+                            Nationality == 2 ~ "China",
+                            Nationality == 3 ~ "Japan",
+                            Nationality == 4 ~ "Southeast Asia",
+                            Nationality == 5 ~ "Other"))
+```
+
+### Trip Purpose
+Modifying Purpose of Trip
+
++ There are no records in survey data where Trip Purpose is missing
+
+```{r}
+# 1. Leisure Travel (sightseeing, visiting family, vacation, shopping)
+# 2. Business Travel 
+# 3. Study
+# 4. Other
+dat1 <- dat1 %>%
+  mutate(TripPurpose = case_when(TripPurpose == 1 ~ "Leisure",
+                            TripPurpose == 2 ~ "Business",
+                            TripPurpose == 3 ~ "Study",
+                            TripPurpose == 4 ~ "Other"))
+```
+
+### Province Residence
+Modifying Province Residence
+
++ There are no records in survey data where Province Residence is missing but access time and distance from province is missing for some records
+
+#### Data manipulation in Province raw data file to fill missing values in survey
+
+```{r}
+provincial_distances <- provincial_distances %>% 
+  separate(Province, c("ProvinceResidence", "Province"), sep = "\\.", remove=FALSE) 
+```
+
+#### Add province distance and time to the airport_survey_data : Join both raw data
+
+```{r, warning=FALSE, message=FALSE}
+
+# Join the two datasets on airport name and province ids
+
+dat1 <- dat1 %>%
+  mutate(ProvinceResidence = as.character(ProvinceResidence)) %>%
+  left_join(provincial_distances, by = c("Airport", "ProvinceResidence")) %>%
+  select(-c(ProvinceResidence)) %>%
+  mutate(Province = as.factor(Province),
+          Airport = as.factor(Airport))
+```
+
+### Group Travel
+Modifying Group Travel
+
++ There are no records in survey data where Group Travel is missing
+
+```{r}
+# 1. Yes
+# 2. No
+dat1 <- dat1 %>%
+  mutate(GroupTravel = case_when(GroupTravel == 1 ~ 1, GroupTravel == 2 ~ 0))
+```
+
+### FrequentFlightDestination
+Modifying Frequent Travel Destinations
+
++ There are no records in survey data where Frequent Travel Destinations is missing
+
+```{r}
+# 1. Southeast Asia
+# 2. China
+# 3. Japan
+# 4. North/South America
+# 5. Europe
+# 6. Other
+# 7. None
+dat1 <- dat1 %>%
+  mutate(FrequentFlightDestination = case_when(FrequentFlightDestination == 1 ~ "Southeast Asia",
+                            FrequentFlightDestination == 2 ~ "China",
+                            FrequentFlightDestination == 3 ~ "Japan",
+                            FrequentFlightDestination == 4 ~ "North/South America",
+                            FrequentFlightDestination == 5 ~ "Europe",
+                            FrequentFlightDestination == 6 ~ "Other",
+                            FrequentFlightDestination == 7 ~ "None"))
+```
+
+
+### Destination
+Modifying Flight Destinations
+
++ There are 5 records in survey data where Flight Destinations of individual is missing
++ can we get information from flight No?
+
+```{r}
+# 1. China
+# 2. Japan
+# 3. Southeast Asia
+# 4. Other
+dat1 <- dat1 %>%
+  mutate(Destination = case_when(Destination == 1 ~ "China",
+                            Destination == 2 ~ "Japan",
+                            Destination == 3 ~ "Southeast Asia",
+                            Destination == 4 ~ "Other"))
+```
+
+### DepartureTime
+Modifying Departure Time
+
++ There are no records in survey data where Departure Times is missing
+
+```{r}
+# 1. 6am - 12pm
+# 2. 12pm - 6pm
+# 3. 6pm - 9pm
+# 4. 9pm - 6am
+dat1 <- dat1 %>%
+  mutate(DepartureTime = case_when(DepartureTime == 1 ~ "6am - 12pm",
+                            DepartureTime == 2 ~ "12pm - 6pm",
+                            DepartureTime == 3 ~ "6pm - 9pm",
+                            DepartureTime == 4 ~ "9pm - 6am"))
+```
+
+### SeatClass
+Modifying Seat Class
+
++ There are 4 records in survey data where Seat Class is missing
++ If we will use this parameter in some modelling, we can fill missings with mode.
+
+```{r}
+# 1. Economy
+# 2. Business
+# 3. First Class
+dat1 <- dat1 %>%
+  mutate(SeatClass = case_when(SeatClass == 1 ~ "Economy",
+                            SeatClass == 2 ~ "Business",
+                            SeatClass == 3 ~ "First Class"))
+```
+
+### ModeTransport
+Modifying Mode of Transport
+
++ There are no records in survey data where Mode of Transport is missing
++ We are removing Air transport mode - that is outlier for this parameter
+
+```{r}
+# 1. Car
+# 2. Taxi
+# 3. Bus
+# 4. Express Bus
+# 5. Subway
+# 6. Airport Limousine
+# 7. Rail
+# 8. KTX (Express Rail)
+# 9. Shuttle provided by travel agency
+# 10. Air
+# 11. Other
+dat1 <- dat1 %>%
+  mutate(ModeTransport = case_when(ModeTransport == 1 ~ "Private Car",
+                                   ModeTransport == 2 ~ "Private Taxi",
+                                   ModeTransport == 3 ~ "Public Bus",
+                                   ModeTransport == 4 ~ "Public Bus",
+                                   ModeTransport == 5 ~ "Subway",
+                                   ModeTransport == 6 ~ "Private Taxi",
+                                   ModeTransport == 7 ~ "Public Train",
+                                   ModeTransport == 8 ~ "Public Train",
+                                   ModeTransport == 9 ~ "Private Taxi",
+                                   ModeTransport == 11 ~ "Other")) %>%
+  filter(ModeTransport != 10)
+# Regroup into maximum 3-4 buckets
+```
+
+### Age
+Modifying Age and add them into groups
+
+```{r}
+
+#Youth (15-24 years) 
+#Adults (25-64 years) 
+#Seniors (65 years and over)
+# dat1 <- dat1 %>%
+#    mutate(AgeGroup = case_when(Age >=15 & Age <= 24 ~ "15-24",
+#                                Age >=25 & Age <= 34 ~ "25-34",
+#                                Age >=35 & Age <= 44 ~ "35-44",
+#                                Age >=45 & Age <= 54 ~ "45-54",
+#                                Age >=55 & Age <= 64 ~ "55-64",
+#                                TRUE ~ "Senior"))
+
+```
+
+### Occupation
+Modifying Occupation
+
+```{r}
+
+# 1. Entrepreneur, Senior management
+# 2. Business (Corporate worker)
+# 3. Sales, Service
+# 4. Government, Military
+# 5. Professionals (doctor, lawyer, professor)
+# 6. industrial, manufacturing
+# 7. self-employeed
+# 8. Student
+# 9. Housewife
+# 10. Retired
+# 11. None
+# 12. Other
+
+```
+
+### Income
+Modifying Income Class
+
+```{r}
+
+# 1. 30 Million Won or less
+# 2. 30~50 Million Won
+# 3. 50~80 Million Won
+# 4. 80 ~100 Million Won
+# 5. 100 ~150 Million Won
+# 6. 150 ~200 Million Won
+# 7. 200 Million Won or more
+
+```
+
+### MileageAirline
+Modifying Mileage Airline
+
++ There are no records in survey data where Mileage Airline is missing
+
+```{r}
+
+# 1. Korea Airlines
+# 2. Asian Airlines
+# 3. Others
+# 4. None
+# 5. Unknown Missing Value
+dat1 <- dat1 %>%
+  mutate(MileageAirline = case_when(MileageAirline == 1 ~ "Korea Airlines",
+                                   MileageAirline == 2 ~ "Asian Airlines",
+                                   MileageAirline == 3 ~ "Others",
+                                   MileageAirline == 4 ~ "None",
+                                   MileageAirline == 5 ~ "Unknown Missing Value"))
+#dat1 <- dat1 %>%
+#  mutate(MileageAirline = ifelse(is.na(Mileage), 'No Mileage', 'Mileage'))         
+
+```
+
+## Quantitative Variables - Handle Missing values
+
+### Age
+Replacing missing values in age
+
++ There is 1 record where Age is missing in survey data provided
++ We have to check the distribution of Age before filling the missing value - So histogram
+
+```{r}
+# Check distribution of age
+hist(dat1$Age)
+```
+
++ The distribution appears to be normal and not highly skewed/ outliers.
++ Hence, We use mean of the age of survey participants to replace missing entries
+
+```{r}
+age_mean = mean(dat1$Age, na.rm = TRUE)
+dat1$Age[is.na(dat1$Age)] <- age_mean
+```
+
++ After this operation we are left with no records where this Age is missing
+
+### Trip Duration
+
+### Flying Companion
+Not relevant
+
+### NoTripsLastYear
+
+### Airfare
+Replacing missing values in Airfare
+
++ There are 155 records where Air fare is missing in survey data provided
++ We have to check the distribution of Airfare before filling the missing value - So histogram
++ We also have `Airport_Airline_data` -> raw data which can be used to treat missing values
+
+```{r}
+# Check distribution of Airfare
+hist(dat1$Airfare)
+```
+
+```{r message=FALSE, warning=FALSE}
+# change column name for join
+names(airline_airfare)[names(airline_airfare) == 'Flight.Destination'] <- 'Destination'
+
+dat1 = dat1 %>%
+  left_join(airline_airfare, by = c("Airport", "Airline", "Destination")) %>%
+  mutate(Airfare = ifelse(is.na(dat1$Airfare), `Average Price`/10000, Airfare))
+
+# fill remaining from survey data average of group of -- Airport, Airlines, Destination, seat type
+airfare_average = dat1 %>%
+  group_by(Airport, Airline, Destination, SeatClass) %>%
+  summarise(a_fare=mean(Airfare, na.rm = TRUE))
+
+dat1 = dat1 %>%
+  left_join(airfare_average, by = c("Airport", "Airline", "Destination", "SeatClass")) %>%
+  mutate(Airfare = ifelse(is.na(dat1$Airfare), a_fare, Airfare))
+
+```
+
++ Airfare in raw data file is multiplied by 10000, so to use that value we have to divide it by 10000
++ After this operation we are left with 6 records where this airfare is missing
+
+### NoTransport
+
+### AccessCost
+Replacing missing values in Access Cost
+
++ There are 197 records where Access Cost is missing in survey data provided
++ We have to check the distribution of Access Cost before filling the missing value - So histogram
+
+```{r}
+# Check distribution of AccessCost
+hist(dat1$AccessCost)
+```
+
++ We dont have any useful information for this parameter in `Airport_Airline_data` -> raw data so these can not be treated
++ Also, 197 is a almost 40% of total records, so we are not going to include this variable in any model
+
+### AccessTime
+Replacing missing values in Access time
+
++ There are 97 records where Access time is missing in survey data provided
++ We have to check the distribution of Access time before filling the missing value - So histogram
++ We also have `Airport_Airline_data` -> raw data which can be used to treat missing values
+
+```{r}
+# Check distribution of AccessTime
+hist(dat1$AccessTime)
+```
+
+Replace missing values in Access time
+```{r}
+dat1 = dat1 %>%
+mutate(AccessTime = ifelse(is.na(dat1$AccessTime),
+                             `Travel Time, minutes`,
+                             AccessTime))
+```
+
++ Access time in raw data file is given in the same units (Minutes), so we use that same value to treat missing, irrespective of no of transport modes used
++ After this operation we are left with no records where this Access time is missing
+
+#### Mileage
+Replacing missing values in Mileage
+
++ There are 398 records where Mileage is missing in survey data provided
++ We have to check the distribution of Mileage before filling the missing value - So histogram
++ We also have `Airport_Airline_data` -> raw data which can be used to treat missing values
+
+```{r}
+# Check distribution of Mileage
+hist(dat1$Mileage)
+```
+
++ We dont have any useful information for this parameter in `Airport_Airline_data` -> raw data so these missings can not be treated
++ Also, 398 is a almost 80% of total records, so we are not going to include this variable in any model
+
+### Replace remaining NAs by 999 for purpose of EDA
+
+```{r, warning=FALSE, message=FALSE}
+
+# There are only 25 rows without NA, so instead of removing NAs replace it with 999
+dat1[is.na(dat1)] <- 999
+```
+
+## Adjust Dataset
+
+### Removing unnecessary columns
+
++ Remove ID column and Flight No column as they do not provide any benefit in this analysis because of their cardinal
++ Remove Departure Hr and Min as information is already captured in Departure Time
++ Remove Occupation - Not relevant for this study
++ Remove Mileage - 398 missing values
++ Remove MileageAirline - Missing values or unknown values
++ Remove AccessCost, Income - Lot of missing values
++ Remove FlyingCompanion, NoTripsLastYear - Not relevant for this study
+
+```{r}
+# Remove ID column and Flight No column as they do not provide any benefit in this analysis because of their cardinal
+dat1 <- dat1 %>%
+  select(-c(FlightNo, ID))
+
+# Remove Departure Hr and Min as information is already captured in Departure Time
+dat1 <- dat1 %>%
+  select(-c(DepartureHr, DepartureMn))
+
+# Remove Occupation - Not relevant for this study
+dat1 <- dat1 %>%
+  select(-c(Occupation))
+
+# Remove Mileage - 398 missing values
+# Remove MileageAirline - Missing values or unknown values
+dat1 <- dat1 %>%
+  select(-c(Mileage, MileageAirline))
+
+# Remove AccessCost - Lot of missing values
+# Remove Income - missing values
+dat1 <- dat1 %>%
+  select(-c(Income))
+
+# Not Relevant for our analysis
+dat1 <- dat1 %>%
+  select(-c(FlyingCompanion, NoTripsLastYear))
+```
+
+
+### Getting the modified dataset as airport_survey_data
+
+```{r, warning=FALSE, message=FALSE}
+
+# Modify data
+airport_survey_data <- dat1 %>%
+  mutate(Airport = as.factor(Airport),
+         Airline = as.factor(Airline),
+         Nationality = as.factor(Nationality),
+         TripPurpose = as.factor(TripPurpose),
+         Province = as.factor(Province),
+         Destination = as.factor(Destination),
+         DepartureTime = as.factor(DepartureTime),
+         SeatClass = as.factor(SeatClass),
+         NoTransport = as.factor(NoTransport),
+         ModeTransport = as.factor(ModeTransport),
+         Gender = as.factor(Gender)) 
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+summary(airport_survey_data)
+attach(airport_survey_data)
+```
+
+### Observations
+
++ 249 surveyed people travelled via GMP and 239 travelled via ICN
++ Maximum surveyed people travelled via Korean Air i.e. count is 153
++ Average age of surveyed people is 40 years
++ Maximum surveyed people have maximum trip purpose as Leisure
++ Average trip duration of surveyed people is 27.44
++ Maximum surveyed people travelled to Southeast Asia
++ Maximum surveyed people are from Seoul Province
++ Average travel time is 105 hours
+
+### Export dataset to be used for modeling in Python
+
+```{r}
+# Selecting relevant columns for further developement of models in Python for analysis
+
+# airport_choice <- airport_survey_data %>%
+#    select(Airport, Airline,AccessTime, DepartureTime,
+#          Age,Destination,Distance,AccessCost)
+# 
+# airline_choice <- airport_survey_data %>%
+#   select(Airline,Airport,Airfare,DepartureTime,Destination)
+
+# write.csv(airport_choice, "../code/airport_choice.csv")
+# write.csv(airline_choice, "../code/airline_choice.csv")
+write.csv(airport_survey_data, "../code/airport_survey_data.csv")
+```
+
+# Basic EDA
+
+## Univariate non-graphical -- Categorical
+
+```{r, warning=FALSE, message=FALSE}
+
+# Function to get the relevant grouped data frames
+# df -> dataframe
+# groupVariable -> the group by column 
+# output -> the resulting data frame
+getGroupedUnivariateData <- function(df, groupVariable) {
+  # group_by() grouped variable
+  # summarise() reduces variable to descriptive stat
+  # count is the new variable name, n() is a counting function
+  # percent is a new variable, sum() and nrow() are functions
+  # tot_selling_price -> total selling price per grouped variable
+  # order_by() tot_selling_price
+  result <- df %>%             
+    group_by_(groupVariable) %>%     
+    summarise(count = n(),   
+              percent = (sum(count) / nrow(df)) * 100,
+              avg_airfare = (mean(Airfare)),
+              avg_accessCost = (mean(AccessCost)),
+              avg_accessTime = (mean(AccessTime))) %>%
+    arrange(desc(percent)) %>%
+    as.data.frame() 
+  
+  return(result)
+}
+
+```
+
+### Preferred Airport
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by airport
+airport_data_airport_type <- getGroupedUnivariateData(airport_survey_data, "Airport")
+
+airport_data_airport_type %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+Observations
+
++ Average airfare and average access cost from ICN airport is more than that of GMP airport, for surveyed people.
+
+### Preferred Airline
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by airline
+airport_data_airline_type <- getGroupedUnivariateData(airport_survey_data, "Airline")
+
+airport_data_airline_type %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+Observations
+
++ Average airfare is maximum for 'other airlines' (NA)
+
+### Gender
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by gender
+airport_data_gender <- getGroupedUnivariateData(airport_survey_data, "Gender")
+
+airport_data_gender %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+Observations
+
++ Average airfare is minimum for Female
+
+### Nationality
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by airport
+airport_data_nationality <- getGroupedUnivariateData(airport_survey_data, "Nationality")
+
+airport_data_nationality %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ 77% people in the survey are from Korea
+
+### Trip Purpose
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by airport
+airport_data_TripPurpose <- getGroupedUnivariateData(airport_survey_data, "TripPurpose")
+
+airport_data_TripPurpose %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ Approximate 66% people are traveling for leisure
++ More than 21% people are travelling for business purposes
+
+### Residence
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by destination
+airport_data_Residence <- getGroupedUnivariateData(airport_survey_data, "Province")
+
+airport_data_Residence %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ More than 60% people are from Seoul and Kyungki-do province, which is near to GMP airport as compared to ICN
++ Approximate 18% people are from Jeju province, which is almost equi-distant from both the airports
+
+### Destination
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by destination
+airport_data_destination <- getGroupedUnivariateData(airport_survey_data, "Destination")
+
+airport_data_destination %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ Southeast Asia, Japan and China are the famous destinations among survey participants
+
+Observations
+
++ Other airlines have highest average airfare
+
+### Preferred Departure Time
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by province residence
+airport_data_deptime <- getGroupedUnivariateData(airport_survey_data, "DepartureTime")
+
+airport_data_deptime %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
++ As per the survey data, most people prefer departure time during the day. 12pm -- 6pm -- 9pm
+
+### Preferred Seat Class
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by seat class
+airport_data_seatClass <- getGroupedUnivariateData(airport_survey_data, "SeatClass")
+
+airport_data_seatClass %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+Observations
+
++ Average airfare and access cost is highest for Business class seats
++ Minimum average airfare for Incheon Province 
+
+Observations
+
+### Preferred Mode of Transport
+
+```{r, warning= FALSE, message= FALSE}
+
+# count, average access cost and average access time by province residence
+airport_data_modeTransport <- getGroupedUnivariateData(airport_survey_data, "ModeTransport")
+
+airport_data_modeTransport %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+
+```
+
+Observations
+
++ Agency Shuttles provide the minimum average airfare
++ Car is the most preferred way of Transport Mode to the airport
+
+## Univariate graphical code -- Categorical
+
+```{r, warning=FALSE, message=FALSE}
+
+# Code histograms using grid.arrange so can see all quant variables together
+grid.arrange(
+  airport_data_airport_type %>% 
+    ggplot(aes(x = reorder(Airport, -count), y = count)) +  
+    xlab("Airport") + 
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  airport_data_airline_type %>% 
+    ggplot(aes(x = reorder(Airline, -count), y = count)) +
+    xlab("Airline") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  airport_data_gender %>% 
+    ggplot(aes(x = reorder(Gender, -count), y = count)) +
+    xlab("Gender") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  airport_data_seatClass %>% 
+    ggplot(aes(x = reorder(SeatClass, -count), y = count)) +
+    xlab("SeatClass") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  airport_data_Residence %>% 
+    ggplot(aes(x = reorder(Province, -count), y = count)) +
+    xlab("Province") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  airport_data_destination %>% 
+    ggplot(aes(x = reorder(Destination, -count), y = count)) +
+    xlab("Destination") +
+    theme_classic() +
+      geom_bar(stat = "identity", fill = "darkolivegreen3"),
+  ncol = 2
+) 
+```
+
+Observations
+
++ GMP and ICN have almost equal number of respondents
++ Korean airline is the most preferred 
++ Females are more frequent travellers
++ Economy class is the most preferred Seat Class
++ Maximum number of passengers belong to Seoul Province 
++ Southeast Asia is the most travelled destination
+
+## Univariate non-graphical -- Quantitative
+
+### Descriptive Statistics
+
+```{r, warning=FALSE, message=FALSE}
+
+# Get descriptive stats 
+summary(airport_survey_data)
+
+```
+
+Observations
+
+## Univariate graphical -- Quantitative
+
+### Histograms
+
+```{r, warning=FALSE, message=FALSE}
+# Code histograms using ggplot() so we can see all quant variables
+
+grid.arrange(
+  airport_survey_data %>% 
+  ggplot(aes(Age)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("Age (in years)")+
+  theme_classic(),
+  
+  airport_survey_data %>% 
+  ggplot(aes(Airfare)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("Airfare (in 10,000 KRW)")+
+  theme_classic(),
+  
+  airport_survey_data %>% 
+  ggplot(aes(AccessCost/1000)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("Transportation Cost to the Airport (in 1000 KRW)") +
+  theme_classic() +
+  xlim(0, 100) +
+  ylim(0, 100),
+  
+  airport_survey_data %>% 
+  ggplot(aes(AccessTime)) +
+    geom_histogram(fill = "darkolivegreen3") +
+  xlab("Transportation Time to the Airport (in minutes)")+
+  theme_classic()
+)
+
+```
+
+### Observations
+
+
+### Boxplots of quantitative data 
+
+```{r, warning= FALSE, message= FALSE }
+
+# get box plot of all the quanitative variables
+par(mfrow = c(2, 2))
+boxplot(Age, main = "Age (in years)")
+boxplot(Airfare, main = "Airfare (in 10,000 KRW)")
+boxplot(AccessCost/1000, main = "Transportation Cost to Airport(1000KRW)")
+boxplot(AccessTime, main = "Transportation Time to Airport(in min)")
+
+```
+
+### Observations
+
+
+## Multivariate non-graphical -- Categorical
+
+### Cross-Tabs with Airport
+
+#### Airport and Airlines Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, Airline)
+```
+```{r, warning= FALSE, message= FALSE }
+# Make cross-tabs between two categorical variables using janitor package
+# cross-tab of bedrooms and floors
+airport_survey_data %>% 
+  tabyl(Airline, Airport) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+#### Airport and Gender Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, Gender)
+```
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of bedrooms and waterfront
+
+airport_survey_data %>% 
+  tabyl(Gender, Airport) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2)%>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ Females prefer GMP Airport
++ Males have almost equal percent of travelling via GMP and ICN airports
+
+#### Airport and Nationality Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, Nationality)
+```
+
+#### Airport and Province Residence Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, Province)
+```
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of bedrooms and condition
+airport_survey_data %>% 
+  tabyl(Province, Airport) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
++ ICN Airport is preferred by Seoul Province
++ GMP Airport is preferred by Jeju Province
+
+#### Airport and Destination Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, Destination)
+```
+```{r}
+# Make cross-tabs between two categorical variables using janitor package
+# cross-tab of Airport and Destinationn
+airport_survey_data %>% 
+  tabyl(Destination, Airport) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2)%>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+#### Airport and Frequent flight destination
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of freq flight destination and Airport
+airport_survey_data %>% 
+  tabyl(FrequentFlightDestination, Airport) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
++ With approximately 19%, Japan is the frequent flight destination from GMP 
+
+#### Airport and Departure Time Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airport, DepartureTime)
+```
+
+
+### Cross-Tabs with Airline
+
+#### Airline and Gender Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airline, Gender)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of Airline and Gender
+airport_survey_data %>% 
+  tabyl(Airline, Gender) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+
+#### Airline and Nationality Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airline, Nationality)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of Airline and Nationality
+airport_survey_data %>% 
+  tabyl(Airline, Nationality) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+
+#### Airline and Nationality Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airline, Destination)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of Airline and Destination
+airport_survey_data %>% 
+  tabyl(Airline, Destination) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+
+#### Airline and DepartureTime Count
+
+```{r}
+# Frequency count
+dat1 %>%
+  tabyl(Airline, DepartureTime)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of Airline and DepartureTime
+airport_survey_data %>% 
+  tabyl(Airline, DepartureTime) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+```
+
+### Trip Purpose and Destination
+
+```{r, warning=FALSE, message=FALSE}
+# cross-tab of floors and waterfront
+airport_survey_data %>% 
+  tabyl(TripPurpose, Destination) %>% 
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_title() %>%
+   kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(1, background = "#e5f5e0")
+
+```
+
+### Observations
+
++ Japan is mostly travelled by the passengers for business purposes
++ Southeast Asia is favorite for Leisure purpose
+
+## Multivariate graphical code -- Categorical
+
+
+```{r, warning= FALSE, message= FALSE }
+
+#Function for heatmap
+ heat_map <- function (x, y,y_title,x_title){
+   x<-enquo(x)
+   y<-enquo(y)
+   
+   
+   airport_survey_data %>%
+     group_by(!!x,!!y) %>%
+     summarise(count = n())  %>%
+     ggplot(aes(!!x,!!y)) +
+     geom_tile(aes(fill = count))+
+     ylab(y_title) + xlab(x_title)+
+     theme_classic() +
+     scale_fill_continuous(guide = guide_legend(title = "Count")) +
+     scale_fill_gradient(low = "white", high = "darkolivegreen3")
+     
+ }
+
+grid.arrange(
+heat_map(Airport, Airline, "Airline", "Airport"),
+heat_map(Airport, Destination, "Destination", "Airport"),
+heat_map(Airport, Province, "Province", "Airport"),
+heat_map(TripPurpose, Destination, "Destination", "TripPurpose"),
+nrow=2)
+
+heat_map(Airport, TripPurpose, "TripPurpose", "Airport" )
+heat_map(Airline, TripPurpose, "TripPurpose", "Airline" )
+
+heat_map(GroupTravel, Airline, "GroupTravel", "Airport" )
+heat_map(GroupTravel, Airport, "GroupTravel", "Airline" )
+
+heat_map(Gender, Airline, "Airline", "Gender" )
+heat_map(Gender, Airport, "Airport", "Gender" )
+
+```
+
+```{r}
+ggplot(dat1, aes(x=Age, y=Airline)) +
+  geom_point(size=2, shape=23)
+
+ggplot(dat1, aes(x=Age, y=Airport)) +
+  geom_point(size=2, shape=23)
+
+ggplot(dat1, aes(x=Age, y=Gender, color=Airport)) +
+  geom_point(size=2, shape=23)
+
+ggplot(dat1, aes(x=Age, y=Gender, color=Airline)) +
+  geom_point(size=2, shape=23)
+
+ggplot(dat1, aes(x=Destination, y=Airfare, color=Airline)) +
+  geom_point(size=2, shape=23) + ylim(0, 270)
+```
+
+## Multivariate non-graphical -- Quantitative
+
+The standard measure between quantitative variables is correlation 
+
+### Correlation plots
+
+```{r, warning= FALSE, message= FALSE }
+# Find correlation of quantitative variables
+#cor_plot <- dat1 %>%
+#  select(-c(FrequentFlightDestination, -MileageAirline))
+
+#cor(cor_plot) 
+
+
+```
+
+### Observations
+
+
+## Multivariate graphical code -- Quantitative
+
+### Pairwise Plot
+
+```{r, warning=FALSE, message=FALSE}
+# Correlation plot
+dat1 %>%
+  select(Airport, Airline, Age, Gender, TripPurpose, TripDuration, Destination, DepartureTime, Province, Airfare, AccessCost, AccessTime) %>%   
+  pairs.panels(hist.col="darkolivegreen3")
+
+```
+
+# Detailed EDA
+
+## Airlines vs Airfare
+
+```{r, warning = FALSE, message=FALSE}
+
+airport_airline_airfare_graph <- ggplot(airport_survey_data, aes(x = Airline, y = Airfare, color = Airport)) + 
+geom_point(alpha = 0.5) +
+   ylim(0, 300) +
+  geom_smooth(method=lm, se=FALSE) +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Airlines', y = 'Airfare  (10,000 Korean Won, KRW)', title = "ICN airport has higher airfares") +
+  scale_fill_brewer(palette = "blue")
+
+ airport_airline_airfare_graph
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+airport_airline_bargraph <- airport_survey_data %>%
+  group_by(Airport, Airline) %>%
+  summarize (Avg_Fare = mean(Airfare)) 
+
+ggplot(data = airport_airline_bargraph, aes(x = Airline, y = Avg_Fare, fill = Airport)) +
+  geom_bar(stat="identity", position="dodge") +
+  coord_flip() +
+    scale_fill_brewer() +
+  labs(x = 'Airlines', y = 'Airfare  (10,000 Korean Won, KRW)', title = "ICN airport has higher average airfares") +
+  theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic"))
+
+```
+
+```{r, warning = FALSE, message=FALSE}
+
+airport_gender_age_graph <- ggplot(airport_survey_data, aes(x = Gender, y = Age, color = Airport)) + 
+geom_point(alpha = 0.5) +
+   ylim(0, 85) +
+  geom_smooth(method=lm, se=FALSE, color="black") +
+theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic")) +
+labs(x = 'Gender', y = 'Age (Years)', title = "Older people prefer GMP airport") +
+guides(color = guide_legend(title = '  Airports')) +
+  scale_fill_brewer()
+
+ airport_gender_age_graph
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+airport_gender_age_bargraph <- airport_survey_data %>%
+  group_by(Airport, Gender) %>%
+  summarize (Avg_age = mean(Age)) 
+
+ggplot(data = airport_gender_age_bargraph, aes(x = Gender, y = Avg_age, fill = Airport)) +
+  geom_bar(stat="identity", position="dodge") +
+  coord_flip() +
+     scale_fill_brewer()  +
+  labs(x = 'Gender', y = 'Age (Years)', title = "Among surveyed, average age of people going to GMP is higher") +
+  theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic"))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+airport_destination_bargraph <- airport_survey_data %>%
+  group_by(Airport, Destination) %>%
+  summarize (Count = n())
+
+ggplot(data = airport_destination_bargraph, aes(x = Destination, y = Count, fill = Airport)) +
+  geom_bar(stat="identity", position="dodge") +
+  coord_flip() +
+     scale_fill_brewer()  +
+  labs(x = 'Destination', y = 'Count', title = "People prefer GMP airport while travelling to Japan and China", subtitle = "People prefer ICN airport while travelling to South East Asia and other airports") +
+  theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0, face = 'bold',color = 'black'),
+      plot.subtitle = element_text(face = "italic"))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+airport_province_bargraph <- airport_survey_data %>%
+  group_by(Airport, Province) %>%
+  summarize (Count = n())
+
+ggplot(data = airport_province_bargraph, aes(x = Province, y = Count, fill = Airport)) +
+  geom_bar(stat="identity", position="dodge") +
+  coord_flip() +
+     scale_fill_brewer()  +
+  labs(x = 'Province', y = 'Count', title = "More travelled via GMP from Seoul,Kyungsang-do,Kyungki-do,Chungcheong-do", subtitle = "More travelled via ICN from Kangwon-do and Jeju") +
+  theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0.6, color = 'black'),
+      plot.subtitle = element_text(face = "italic"))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+airport_transport_travelTime_graph <- airport_survey_data %>%
+  group_by(Airport, ModeTransport) %>%
+  summarize (Average_Travel_Time = mean(`Travel Time, minutes`))
+
+ggplot(data = airport_transport_travelTime_graph, aes(x = ModeTransport, y = Average_Travel_Time, fill = Airport)) +
+  #geom_bar(stat="identity", position="dodge") +
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single", padding = 0)) +
+  coord_flip() +
+      scale_fill_brewer() +
+  labs(x = 'Mode of Transport', y = 'Average Travel Time (in minutes)', title = "Average Travel Time to ICN is more") +
+  theme_classic()+
+theme(legend.title = element_text(size=10),
+      plot.title = element_text(hjust = 0.6, face = 'bold', color = 'black'),
+      plot.subtitle = element_text(face = "italic"))
+
+```
+
+```{r}
+ggplot(dat1, aes(fill=Airline, y=Airfare, x=Airline)) + 
+    geom_bar(position="dodge", stat="summary", fun.y="mean")
+```
+
+### Observations
+
+# Statistical EDA
+
+## Chi-squared test
+
+### Airport and Airline
+
+```{r, warning=FALSE, message=FALSE}
+
+chisq.test(table(airport_survey_data$Airport, airport_survey_data$Airline))
+
+```
+
+### Airport and Age
+
+```{r, warning=FALSE, message=FALSE}
+
+chisq.test(table(airport_survey_data$Airport, airport_survey_data$Age))
+
+```
+
+### Airport and Destination
+
+```{r, warning=FALSE, message=FALSE}
+
+chisq.test(table(airport_survey_data$Airport, airport_survey_data$Destination))
+
+```
+
+### Airport and Airfare
+
+```{r, warning=FALSE, message=FALSE}
+
+chisq.test(table(airport_survey_data$Airport, airport_survey_data$Airfare))
+
+```
+
+## t-test
+
+```{r, warning=FALSE, message=FALSE}
+
+t.test(airport_survey_data$Airfare[airport_survey_data$Airport == "ICN"], airport_survey_data$Airfare[airport_survey_data$Airport == "GMP"])
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+t.test(airport_survey_data$Age[airport_survey_data$Airport == "ICN"], airport_survey_data$Age[airport_survey_data$Airport == "GMP"])
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+t.test(airport_survey_data$`Travel Time, minutes`[airport_survey_data$Airport == "ICN"], airport_survey_data$`Travel Time, minutes`[airport_survey_data$Airport == "GMP"])
+
+```
+
+## ANOVA test
+
+```{r, message=FALSE, warning=FALSE}
+
+# Compute the analysis of variance
+res.aov <- aov(Airfare ~ Airport + Airline + Gender + Destination, data = airport_survey_data)
+# Summary of the analysis
+summary(res.aov)
+
+```
+
+### Preparing the Data
+
+```{r}
+
+summary(dat1)
+summary(airport_survey_data)
+
+```
+
+### Remove Highly correlated variables 
+
+```{r}
+
+# ProvinceDistance and Access time # Correlated with Province
+dat1 <- dat1 %>%
+  select(-c(Distance, AccessTime))
+
+# TravelTime, minutes?
+
+
+```
+
++ Province Distance is highly correlated with Provice, so removed from the dataset
++ Access Time, time taken by individual from province to airport is also highly correlated with Provice and distance, so removed from the dataset
+
+### Remove unrelated variables
+
+```{r}
+# Remove AccessCost - Lot of missing values
+# Remove FrequentFlightDestination
+# GroupTravel
+# TripDuration
+# Gender
+# AgeGroup
+# SeatClass
+# NoTransport
+
+dat1 <- dat1 %>%
+  select(-c(AccessCost, FrequentFlightDestination, GroupTravel,
+            TripDuration, Gender, SeatClass, NoTransport, TripPurpose,
+            'Average Price', a_fare, 'Travel Time, minutes', ModeTransport))
+
+## Remove rows with Destination 999
+dat1 <- dat1 %>%
+  filter(Destination != "999")
+
+## Remove rows with Airfare 999
+dat1 <- dat1 %>%
+  filter(Airfare != "999")
+
+
+```
+
++ Remove AccessCost is removed from final dataset - Lot of missing values
++ Remove FrequentFlightDestination - not used for this study
++ GroupTravel - not used for this study
++ TripDuration - not used for this study
++ Gender - no impact of gender on any of the choice (Airport, Airline)
++ AgeGroup - no impact of age on any of the choice (Airport, Airline)
++ SeatClass - Almost all survey participants travelled in economy, so data is biased
++ NoTransport - Not relevant for this study
+
+# Save the dataset for use in scikit learn
+
+```{r}
+
+write.xlsx(dat1, 'export_from_code.xlsx')
+```
+
+
+```{r}
+# Write CSV in R
+write.csv(dat1, file = "export_from_code.csv",row.names=FALSE)
+```
+
+# Descriptive Statistics of final dataset
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+
+dat1 <- dat1 %>%
+  mutate(Airline = as.factor(Airline),
+         Airport = as.factor(Airport),
+         DepartureTime = as.factor(DepartureTime),
+         Destination = as.factor(Destination),
+         Nationality = as.factor(Nationality))
+
+skim(dat1) %>% 
+  kable(format = "latex", booktabs = T) 
+```
+
+
