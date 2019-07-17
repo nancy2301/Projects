@@ -1,0 +1,787 @@
+---
+title: "Zillow Analysis by Data-Cated"
+author: "Eirik, Jillian, Nancy, Yifan, Ziyu "
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  # pdf_document: 
+  #   latex_engine: xelatex
+  
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+	fig.width = 8.5,
+	message = FALSE,
+	warning = FALSE,
+	# include = FALSE,
+	echo = FALSE
+)
+
+options(tinytex.verbose = TRUE)
+
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environment of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE) {
+  lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), 
+         detach, character.only = TRUE, unload = TRUE)
+}
+```
+
+
+# Install and load Packages
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(here)
+
+library(skimr)
+library(sqldf)
+```
+
+
+# Load Data
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+agent_acq_dates <- read_csv(here("RawData", "AgentAcquisitionDates.csv"))
+agent_lookup <- read_csv(here("RawData", "AgentIDZUIDLookup.csv"))
+agent_leads <- read_csv(here("RawData", "AgentLeads.csv"))
+phonecalls_16_17 <- read_csv(here("RawData", "PhoneCalls20161001_20170228.csv"))
+phonecalls_17 <- read_csv(here("RawData", "PhoneCalls20170301_20170630.csv"))
+sales_meeting <- read_csv(here("RawData", "SalesMeetings.csv"))
+
+```
+
+
+# Getting an overview of the data
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+summary(agent_acq_dates)
+summary(agent_leads)
+summary(phonecalls_16_17)
+summary(phonecalls_17)
+summary(sales_meeting)
+skim(agent_acq_dates)
+
+
+```
+
+
+# Begin making on table with all the important variables - join agent_leads and agent_lookup
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid <- agent_leads %>%
+  left_join(agent_lookup, c("REAgentID" = "REAgentID"))
+
+```
+
+
+# Duplicate zuids?
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+n_occur <- data.frame(table(leads_zuid$REAgentID))
+n_occur[n_occur$Freq > 50,]
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+n_occur <- data.frame(table(agent_lookup$ZUID))
+n_occur[n_occur$Freq > 1,]
+
+```
+
+
+# Only select rows with acquisition date after 2016-09-30
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+acq <- agent_acq_dates[agent_acq_dates$AcquisitionDate > "2016-9-30 UTC",]
+acq <- acq %>%
+  filter(!is.na(AcquisitionDate))
+summary(acq)
+```
+
+
+# Joining acquisition date with the new table
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid <- leads_zuid %>%
+  left_join(acq, c("ZUID" = "ZUID"))
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+#leads_zuid$LeadDateTime <- as.Date(leads_zuid$LeadDateTime)
+
+```
+
+
+# Too many searches for one RE Agent?
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+n_occur <- data.frame(table(leads_zuid$REAgentID))
+n_occur[n_occur$Freq > 200,]
+
+```
+
+
+# Remove the ones with more than 200 unique leads and those without any REAgentID and ZUID
+
+```{r, echo=TRUE}
+leads_zuid <- leads_zuid %>%
+  filter(ZUID != 1)
+
+leads_zuid <- leads_zuid %>%
+  filter(!REAgentID %in% c("0033300001ekvDDAAY", "0033300001tuTJeAAM", "0034000001JUSvpAAH", "0034000001SEjLlAAL"))
+
+```
+
+
+# Rename LeadType to Organic and Email
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid$LeadVendor[leads_zuid$LeadType == "Social Organic"] <- "Organic"
+leads_zuid$LeadVendor[leads_zuid$LeadType == "Organic"] <- "Organic"
+leads_zuid$LeadVendor[leads_zuid$LeadType == "Email"] <- "Email"
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+skim(leads_zuid)
+
+```
+
+
+# Unique LeadType
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+unique(leads_zuid$LeadType)
+
+```
+
+
+# Unique LeadVendors
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+unique(leads_zuid$LeadVendor)
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid %>%
+  select(LeadVendor) %>%
+  count(LeadVendor) %>%
+  filter(n > 3)
+  
+
+```
+
+
+# Grouping together into Leadtype
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid <- leads_zuid %>%
+  mutate(LeadType = case_when(
+    LeadType %in% c("Social Organic", "Organic") ~ "Organic",
+    LeadType == "Email" ~ "Email",
+    LeadType == "Paid" ~ "Paid",
+    LeadType == "unknown" ~ "Unknown",
+    is.na(LeadType) ~ "NA",
+    TRUE ~ "Unknown")
+    )
+```
+
+
+# Group togethher lead channel with what we have cost for
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid <- leads_zuid %>%
+  mutate(LeadVendor = case_when(
+    LeadVendor %in% c("email_welcome", "email", "Gmail", "email_autoresponder", "gmail",
+                      "email_engagement", "Email", "email_content", "Yahoo", "Email_sales", "Email",
+                      "email_sales_june_2015", "email_sales", "email_content_august_2014",
+                      "email_sales_nov_2014", "email_sales_july_2014", "email_content_apr_2015", 
+                  "email_content_july_2014", "hs_email", "Outlook", "email_content_feb_2014", "email_content_apr_2014",
+                      "email_product") ~ "Email", 
+    LeadVendor %in% c("Facebook", "facebook", "Linkedin Ads", "Instagram", "Linkedin Display", "instagram",
+                      "Linkedin", "Twitter", "twitter") ~ "Social",
+    LeadVendor == "Bing Search" ~ "Bing",
+    LeadVendor == "Google Search" ~ "Google",
+    LeadVendor %in% c("Affiliate", "zillow", "internal", "organic", "Zillow", "Trulia", "Trulia_R4R", "Organic") ~ "Organic",
+    is.na(LeadVendor) ~ "NA",
+    TRUE ~ "Other")
+    )
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+unique(leads_zuid$LeadVendor)
+
+```
+
+# Count of lead Vendor
+
+```{r, echo=TRUE}
+
+sqldf('select LeadVendor, count(*) from leads_zuid group by 1')
+
+```
+
+
+# Marketing activity
+
+# Leads can happen after acquisition date (roughly 30%), remove those rows.
+
+```{r, echo=TRUE}
+
+# Create a new variable LeadTimes
+leads_zuid["x"]  <- 1
+library(data.table)
+DT <- data.table(leads_zuid)
+
+DT[, LeadTimes:= cumsum(x), by = list(REAgentID)]
+
+DT<- dplyr::select(DT, -c(x))
+# calculate the average LeadTimes when people got acquisited
+DTe <- DT %>% filter(!is.na(AcquisitionDate))
+DTe <- DTe %>% mutate(dif = AcquisitionDate - LeadDateTime)
+
+# 29% (3585 / 12341) acuiqistion happen before lead 
+newdf <- subset(DTe, dif< 0) 
+newdf <- subset(newdf, LeadTimes == 1 )
+count(newdf) # 3585
+length(unique(DTe$ZUID)) #12341
+
+# only select acquistion happened after leads
+DTe <- DTe %>% filter(dif >0)
+
+DTe <- DTe %>% group_by(REAgentID) %>% slice(which.min(dif))
+mean(DTe$LeadTimes) # 1.43
+median(DTe$LeadTimes) # 1
+summary(DTe)
+
+nrow(DTe[DTe$LeadTimes == 1,]) # 6292
+# 72% (6292 / 8756) of people got acquisited after the first lead
+
+```
+
+
+# Sales activity
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+phonecalls_16_17 <- phonecalls_16_17 %>%
+  filter(TalkTimeMinutes != 0) %>%
+  filter(TalkTimeMinutes < 60)
+
+phonecalls_17 <- phonecalls_17 %>%
+  filter(TalkTimeMinutes != 0) %>%
+  filter(TalkTimeMinutes < 60)
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+summary(phonecalls_16_17)
+
+```
+
+
+# Inbound and Outbound phone calls
+
+```{r, echo=TRUE}
+phonecalls_16_17 <- phonecalls_16_17 %>%
+  mutate(Activity = case_when(PhoneCallType == "RE Agent Called Sales Rep" ~ "Inbound",
+                              PhoneCallType == "Sales Rep Called RE Agent" ~ "Outbound"))
+	
+phonecalls_17 <- phonecalls_17 %>%
+ mutate(Activity = case_when(PhoneCallType == "RE Agent Called Sales Rep" ~ "Inbound",
+                              PhoneCallType == "Sales Rep Called RE Agent" ~ "Outbound"))
+```
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+phonecall <- rbind(phonecalls_16_17, phonecalls_17)
+
+```
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+phonecall <- phonecall %>%
+  select(-SalesRepID, -PhoneCallType)
+
+```
+
+# Remove NA rows in phonecall
+
+```{r, echo=TRUE}
+phonecall <- phonecall %>%
+  filter(REAgentID != "")
+
+```
+
+# Join Sales Meeting and Phone calls just to monitor activity of REAgentID
+# Since, Joining them will create duplicate sales meeting activity we have used phone calls and sales activity to calculate cost
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid_phonecall_salesmeeting <- leads_zuid %>%
+  left_join(phonecall, c("REAgentID" = "REAgentID"))
+
+```
+
+# Number of phone calls by Lead vendor
+
+```{r, echo=TRUE}
+sqldf('select LeadVendor, sum(TalkTimeMinutes), count(PhoneCallDateTime)
+      from leads_zuid_phonecall_salesmeeting
+      group by 1')
+
+```
+
+
+# Number of phone calls by Lead vendor - only for acquired customer
+
+```{r, echo=TRUE}
+sqldf('select LeadVendor, sum(TalkTimeMinutes), count(PhoneCallDateTime)
+      from leads_zuid_phonecall_salesmeeting
+      where AcquisitionDate is not NULL
+      group by 1')
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+sales_meeting <- sales_meeting %>%
+  select(-SalesRepID)
+
+```
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid_phonecall_salesmeeting <- leads_zuid_phonecall_salesmeeting %>%
+  left_join(sales_meeting, c("REAgentID" = "REAgentID"))
+
+```
+
+
+```{r, echo=TRUE}
+
+leads_zuid_phonecall_salesmeeting$PhoneCallDateTime <-  as.Date(leads_zuid_phonecall_salesmeeting$PhoneCallDateTime)
+
+leads_zuid_phonecall_salesmeeting$SalesMeetingDate <- as.Date(leads_zuid_phonecall_salesmeeting$SalesMeetingDate)
+
+```
+
+# Select those where Acquisition Date >= Lead Date or Acquisition Date is null
+
+```{r, echo=TRUE}
+leads_zuid_final <- leads_zuid %>%
+  filter(AcquisitionDate >= LeadDateTime | is.na(AcquisitionDate))
+
+leads_zuid_phonecall_salesmeeting_final <- leads_zuid_phonecall_salesmeeting %>%
+  filter(AcquisitionDate >= LeadDateTime | is.na(AcquisitionDate))
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+leads_zuid_phonecall_salesmeeting_final <- leads_zuid_phonecall_salesmeeting_final %>%
+  filter(AcquisitionDate >= PhoneCallDateTime | is.na(AcquisitionDate))
+
+```
+
+
+
+# Meeting and Phone Calls Cost Assignment
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+leads_zuid_phonecall_salesmeeting_final <- sqldf('Select *, (SalesMeeting_Cost+SalesPhoneCall_Cost) as Sales_Cost
+      from ( Select *,
+      (case when SalesMeetingDate is not NULL then 300
+      else 0 end) as SalesMeeting_Cost,
+      case when PhoneCallDateTime is not NULL then 10
+      else 0 end as SalesPhoneCall_Cost
+      from leads_zuid_phonecall_salesmeeting_final)')
+
+leads_zuid_phonecall_salesmeeting_final <- subset(leads_zuid_phonecall_salesmeeting_final, select = -c(SalesMeeting_Cost, SalesPhoneCall_Cost))
+
+```
+
+
+```{r, echo=TRUE}
+
+sqldf('select LeadVendor, count(*) from leads_zuid_final group by 1')
+
+```
+
+# Graph of frequency by Lead Vendors
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+ggplot(data = leads_zuid) +
+  aes(x = LeadVendor) +
+  geom_bar(fill = "#0c4c8a") +
+  theme_minimal()
+
+leads_zuid %>%
+  drop_na(AcquisitionDate) %>%
+ggplot(aes(x = LeadVendor)) +
+  geom_bar()
+
+leads_zuid %>%
+  mutate(AcquisitionDate = case_when(is.na(AcquisitionDate) ~ "NA",
+                   TRUE ~ "Other")) %>%
+  filter(AcquisitionDate == "NA") %>%
+  group_by(LeadVendor) %>%
+  ggplot(aes(x = LeadVendor)) +
+  geom_bar()
+
+```
+
+# Graph of Lead Type vs LeadDateTime
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+ggplot(data = leads_zuid) +
+  aes(x = LeadDateTime, fill = LeadType) +
+  geom_histogram(bins = 30) +
+  theme_minimal()
+```
+
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+leads_zuid %>%
+  mutate(AcquisitionDate = case_when(is.na(AcquisitionDate) ~ "NA",
+                   TRUE ~ "Other")) %>%
+  filter(AcquisitionDate == "NA") %>%
+  group_by(LeadType) %>%
+  ggplot(aes(x = LeadType)) +
+  geom_bar()
+  
+```
+
+
+# Find contribution of lead platform, lead type and lead vendor during the end to end conversation between Sales Agent and REAgentID
+
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+agent_zuid_leadPlatform_leadType_leadVendor <- sqldf('SELECT REAgentID, ZUID, 
+      case when ZUID is NULL then "No" else "Yes" end as ZUID_Yes_No,
+      case when AcquisitionDate is NULL then "NotAcquired" else "Acquired" end as AcqDate_Yes_No,
+      sum(case when LeadPlatform = "Web" then 1 else 0 end) as count_LeadPlatform_web,  
+      sum(case when LeadPlatform = "Phone" then 1 else 0 end) as count_LeadPlatform_phonecalls, 
+      sum(case when LeadType = "Email" then 1 else 0 end) as count_LeadType_email, 
+      sum(case when LeadType = "Paid" then 1 else 0 end) as count_LeadType_paid, 
+      sum(case when LeadType = "Organic" then 1 else 0 end) as count_LeadType_organic, 
+      sum(case when LeadType = "Unknown" then 1 else 0 end) as count_LeadType_unknown, 
+      sum(case when LeadVendor = "Other" then 1 else 0 end) as count_LeadVendor_other, 
+      sum(case when LeadVendor = "Email" then 1 else 0 end) as count_LeadVendor_email, 
+      sum(case when LeadVendor = "Organic" then 1 else 0 end) as count_LeadVendor_organic, 
+      sum(case when LeadVendor = "NA" then 1 else 0 end) as count_LeadVendor_na, 
+      sum(case when LeadVendor = "Social" then 1 else 0 end) as count_LeadVendor_social, 
+      sum(case when LeadVendor = "Google" then 1 else 0 end) as count_LeadVendor_google, 
+      sum(case when LeadVendor = "Bing" then 1 else 0 end) as count_LeadVendor_bing,
+      count(*) as number_of_meetings
+      from leads_zuid_final
+      group by 1, 2, 3')
+
+percentage_leads_share <- sqldf('Select REAgentID, ZUID, ZUID_Yes_No,
+(count_LeadPlatform_web * 1.0/ (count_LeadPlatform_web + count_LeadPlatform_phonecalls))*100 as percent_LeadPlatform_web,
+(count_LeadPlatform_phonecalls * 1.0/ (count_LeadPlatform_web + count_LeadPlatform_phonecalls))*100 as percent_LeadPlatform_phonecalls,
+(count_LeadType_email * 1.0/ (count_LeadType_email + count_LeadType_paid + count_LeadType_organic + count_LeadType_unknown))*100 as percent_LeadType_email,
+(count_LeadType_paid * 1.0/ (count_LeadType_email + count_LeadType_paid + count_LeadType_organic + count_LeadType_unknown))*100 as percent_LeadType_paid,
+(count_LeadType_organic * 1.0/ (count_LeadType_email + count_LeadType_paid + count_LeadType_organic + count_LeadType_unknown))*100 as percent_LeadType_organic,
+(count_LeadType_unknown * 1.0/ (count_LeadType_email + count_LeadType_paid + count_LeadType_organic + count_LeadType_unknown))*100 as percent_LeadType_unknown,
+(count_LeadVendor_other * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_other,
+(count_LeadVendor_email * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_email,
+(count_LeadVendor_organic * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_organic,
+(count_LeadVendor_na * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_na,
+(count_LeadVendor_social * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_social,
+(count_LeadVendor_google * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_google,
+(count_LeadVendor_bing * 1.0/ (count_LeadVendor_other + count_LeadVendor_email + count_LeadVendor_organic + count_LeadVendor_na + count_LeadVendor_social + count_LeadVendor_google + count_LeadVendor_bing))*100 as percent_LeadVendor_bing
+from agent_zuid_leadPlatform_leadType_leadVendor group by 1, 2, 3')
+
+percentage_leads_share[is.na(percentage_leads_share)] <- 0
+
+phonecall_totalTalkTime <- sqldf('SELECT REAgentID, 
+                                 sum(case when Activity = "Inbound" then 1 else 0 end) as Inbound,
+                                 sum(case when Activity = "Outbound" then 1 else 0 end) as Outbound,                  
+                                 sum(case when Activity = "Inbound" then TalkTimeMinutes else 0 end) as Inbound_total_talktime,
+           sum(case when Activity = "Outbound" then TalkTimeMinutes else 0 end) as Outbound_total_talktime,
+           sum(TalkTimeMinutes) from phonecall group by 1')
+
+
+
+```
+
+
+```{r, echo=TRUE}
+
+agent_zuid_phonecall <- sqldf('Select * from agent_zuid_leadPlatform_leadType_leadVendor a left join phonecall_totalTalkTime b on a.REAgentID = b.REAgentID')
+
+agent_zuid_phonecall[is.na(agent_zuid_phonecall)] <- 0
+
+```
+
+
+
+
+```{r, echo=TRUE}
+#set the first row
+
+agent_zuid_leadPlatform_leadType_leadVendor[1, "REAgentID"] <- 000
+agent_zuid_leadPlatform_leadType_leadVendor[1, "ZUID"] <- 000
+```
+
+
+
+```{r, echo=TRUE}
+write.csv(agent_zuid_phonecall, file = "Final.csv")
+```
+
+```{r, echo=TRUE}
+
+meeting_complete <- agent_lookup %>%
+  left_join(agent_acq_dates, c("ZUID" = "ZUID"))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE}
+meeting_complete <- meeting_complete %>%
+  left_join(sales_meeting, c("REAgentID" = "REAgentID"))
+
+```
+
+```{r, echo=TRUE}
+
+meeting_complete <- meeting_complete %>%
+  drop_na(SalesMeetingDate)
+
+```
+
+```{r, echo=TRUE}
+meeting_complete <- sqldf('SELECT REAgentID, ZUID, AcquisitionDate, SalesMeetingDate,
+      (case when SalesMeetingDate is not NULL then 300
+      else 0 end) as SalesMeeting_Cost
+      from meeting_complete')
+
+
+```
+
+```{r, echo=TRUE}
+meeting_complete <- sqldf('SELECT REAgentID, ZUID, 
+      case when AcquisitionDate is NULL then "NotAcquired" else "Acquired" end as AcqDate_Yes_No,
+      SalesMeeting_Cost
+      from meeting_complete
+      group by REAgentID')
+
+
+```
+
+
+```{r, echo=TRUE}
+
+ggplot(data = meeting_complete) +
+  aes(x = AcqDate_Yes_No) +
+  geom_bar(fill = "#0c4c8a") +
+  theme_minimal()
+
+```
+
+```{r, echo=TRUE}
+
+agent_zuid_leadPlatform_leadType_leadVendor %>%
+  select(REAgentID) %>%
+  count(REAgentID) %>%
+  filter(n > 1)
+
+```
+
+
+# most leads through the web
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+ggplot(data = agent_leads) +
+  aes(x = LeadPlatform) +
+  geom_bar(fill = "#0c4c8a") +
+  theme_minimal()
+```
+
+# Organic gives the most leads
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+ggplot(data = agent_leads) +
+  aes(x = LeadType) +
+  geom_bar(fill = "#0c4c8a") +
+  theme_minimal() +
+  facet_wrap(vars(LeadPlatform))
+
+```
+
+
+# Organic clearly the best for acqusition as well
+
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+
+leads_zuid %>%
+  drop_na(AcquisitionDate) %>%
+  drop_na(LeadType) %>%
+  group_by(LeadPlatform, LeadType) %>%
+  ggplot(aes(x = LeadPlatform, fill = LeadType)) +
+  geom_bar(position = "dodge")
+
+```
+
+
+
+
+```{r, echo=TRUE}
+
+leads_zuid_phonecall_salesmeeting_final %>%
+  filter(!is.na(TalkTimeMinutes)) %>%
+  group_by(REAgentID) %>%
+  ggplot(aes(TalkTimeMinutes, fill = Activity)) + 
+  geom_density(alpha = 0.6)
+  
+
+
+```
+
+# ROI calculation
+
+```{r, echo=TRUE}
+# for missing value in LeadType, assign average NPV
+last_touch <- DTe %>%
+  mutate(Revenue = ifelse(LeadType == "Paid", 7000,
+                          ifelse(LeadType == "Email", 8000,
+                                 ifelse(LeadType == "Organic", 7500, 7500))))
+
+last_touch <- dplyr::select(last_touch, c(REAgentID, Revenue))
+
+# Join last_touch table with percentage_leads_share
+
+Revenue <- percentage_leads_share %>% left_join(last_touch, c("REAgentID" = "REAgentID"))
+
+# only select paying customer rows
+paying_customer <- Revenue %>% filter(!is.na(Revenue))
+paying_customer$REAgentID<-as.factor(paying_customer$REAgentID)
+summary(paying_customer)
+
+
+
+paying_customer <- paying_customer %>% 
+  mutate(EmailRevenue = Revenue * percent_LeadType_email/100) %>%
+  mutate(PaidRevenue = Revenue * percent_LeadType_paid/100) %>%
+  mutate(OrganicRevenue = Revenue * percent_LeadType_organic/100) %>%
+  mutate(UnknownRevenue = Revenue * percent_LeadType_unknown /100) %>%
+  mutate(Lead_Vendor_otherRevenue = Revenue * percent_LeadVendor_other/100) %>%
+  mutate(Lead_Vendor_emailRevenue = Revenue * percent_LeadVendor_email/100) %>%
+  mutate(Lead_Vendor_organicRevenue = Revenue * percent_LeadVendor_organic/100) %>%
+  mutate(Lead_Vendor_naRevenue = Revenue * percent_LeadVendor_na/100) %>%
+  mutate(Lead_Vendor_socialRevenue = Revenue * percent_LeadVendor_social/100) %>%
+  mutate(Lead_Vendor_bingRevenue = Revenue * percent_LeadVendor_bing/100) %>%
+  mutate(Lead_Vendor_googleRevenue = Revenue * percent_LeadVendor_google/100) 
+  
+
+
+paying_customer <- dplyr::select(paying_customer, c(REAgentID,Lead_Vendor_otherRevenue, Lead_Vendor_emailRevenue, Lead_Vendor_organicRevenue, Lead_Vendor_naRevenue, Lead_Vendor_socialRevenue, Lead_Vendor_bingRevenue, Lead_Vendor_googleRevenue,Revenue))
+summary(paying_customer)
+
+# marketing cost
+agent_zuid_leadPlatform_leadType_leadVendor <- agent_zuid_leadPlatform_leadType_leadVendor %>%
+  mutate(PaidSocialCost = 150 * count_LeadVendor_social) %>%
+  mutate(PaidBingCost = 80 * count_LeadVendor_bing) %>%
+  mutate(PaidGoogleCost = 100 * count_LeadVendor_google) %>%
+  mutate(EmailCost = 10 * count_LeadVendor_email ) %>%
+  mutate(OrganicCost = 0 * count_LeadType_organic ) %>%
+  mutate(UnknownCost = 60 * count_LeadType_unknown) %>%
+  mutate(NACost = 60 * count_LeadVendor_na)
+
+# ROI - Marketing Channel
+
+ROIpre <- agent_zuid_leadPlatform_leadType_leadVendor %>% left_join(paying_customer, c("REAgentID" = "REAgentID"))
+
+SumSocialCost <- sum(ROIpre$PaidSocialCost)
+SumBingCost <- sum(ROIpre$PaidBingCost)
+SumGoogleCost <- sum(ROIpre$PaidGoogleCost)
+SumEmailCost <- sum(ROIpre$EmailCost)
+SumOrganicCost <- sum(ROIpre$OrganicCost)
+
+SumSocialRevenue <- sum(ROIpre$Lead_Vendor_socialRevenue, na.rm=TRUE)
+SumBingRevenue <- sum(ROIpre$Lead_Vendor_bingRevenue, na.rm=TRUE)
+SumGoogleRevenue <- sum(ROIpre$Lead_Vendor_googleRevenue, na.rm=TRUE)
+SumEmailRevenue <- sum(ROIpre$Lead_Vendor_emailRevenue, na.rm=TRUE)
+SumOrganicRevenue <- sum(ROIpre$Lead_Vendor_organicRevenue, na.rm=TRUE)
+
+ROISocial = (SumSocialRevenue - SumSocialCost) / SumSocialCost
+ROIBing = (SumBingRevenue - SumBingCost)/SumBingCost
+ROIGoogle = (SumGoogleRevenue - SumGoogleCost)/SumGoogleCost
+ROIEmail = (SumEmailRevenue - SumEmailCost)/SumEmailCost
+ROIOrganic = (SumOrganicRevenue - SumOrganicCost)/SumOrganicCost
+
+              
+```
+
+
+
+```{r, echo=TRUE}
+# ROI Sales Channel
+sales <- dplyr::select(leads_zuid_phonecall_salesmeeting_final, c(REAgentID, Activity))
+summary(sales)
+```
+
+
+```{r, echo=TRUE}
+#phone call cost per REAgentID
+sales["phonecallcost"] <- 10
+
+sales <- sales%>% group_by(REAgentID) %>%
+  summarize(SumPhoneCallCost = sum(phonecallcost))
+
+#meeting cost per REAgentID
+sales_meeting["meetingcost"] <- 300
+sales_meeting <- sales_meeting %>% group_by(REAgentID) %>%
+  summarize(SumMeetingCost = sum(meetingcost))
+
+# Join table
+Sales_final <- sales %>% left_join(sales_meeting, c = ("REAgentID" = "REAgentID"))
+
+ROIpre <- dplyr::select(ROIpre, c(REAgentID, AcqDate_Yes_No,Revenue))
+Sales_final <- ROIpre %>% left_join(Sales_final,c = ("REAgentID" = "REAgentID") )
+
+Sales_final <- Sales_final[!with(Sales_final,is.na(SumMeetingCost)&is.na(SumPhoneCallCost)),]
+sales_pre <- Sales_final %>% filter(!is.na(Revenue))%>% 
+  mutate(SumPhoneCallCost = ifelse(is.na(SumPhoneCallCost),0,SumPhoneCallCost)) %>%
+  mutate(SumMeetingCost = ifelse(is.na(SumMeetingCost),0,SumMeetingCost)) 
+sales_pre <- sales_pre %>%
+  mutate(PhoneCallRevenue = Revenue * (SumPhoneCallCost/(SumPhoneCallCost+SumMeetingCost))) %>%
+           mutate(MeetingRevenue = Revenue * (SumMeetingCost/(SumPhoneCallCost+SumMeetingCost)))
+
+Sales_final <- Sales_final %>% left_join(sales_pre, c = ("REAgentID" = "REAgentID"))
+
+# Sales Chanel ROI
+
+SumPhoneCallCost <- sum(Sales_final$SumPhoneCallCost, na.rm=TRUE)
+SumMeetingCost <- sum(Sales_final$SumMeetingCost, na.rm=TRUE)
+SumPhoneCallRevenue <- sum(Sales_final$PhoneCallRevenue, na.rm=TRUE)
+SumMeetingRevenue <- sum(Sales_final$MeetingRevenue, na.rm=TRUE)
+
+ROIPhoneCall <- (SumPhoneCallRevenue - SumPhoneCallCost)/SumPhoneCallCost
+ROIMeeting <- (SumMeetingRevenue - SumMeetingCost) / SumMeetingCost
+```
+
